@@ -3,7 +3,7 @@
   "date_kst": "2026-11-05",
   "status": "in progress: course API credentials expected next week",
   "n05_complete": false,
-  "notion_updated": false,
+  "notion_updated": true,
   "code_commit": "3b8f54385999bdc4eb8919f4a6832921adf2755e",
   "input": {
     "path": "runs/n05/practice-server",
@@ -282,5 +282,6 @@
     "No real model API request was made. Full attempts stopped at configuration/MISSING_CONFIGURATION.",
     "Known practice TCP exchange does not establish protocol inference or N05 completion.",
     "Raw logs and analysis JSON remain under ignored runs/. This file is a selected public evidence summary."
-  ]
+  ],
+  "notion_url": "https://app.notion.com/p/409bc69680a68180b514c67028a5ef77?pvs=204"
 }
