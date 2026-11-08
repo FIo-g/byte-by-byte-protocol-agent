@@ -176,19 +176,17 @@
     },
     {
       "id": "error-odd-length-payload-sent",
-      "description": "Rejected header followed by payload bytes; the server drains them and closes cleanly",
+      "description": "Rejected header and payload bytes in one write; the server drains them so close does not reset the reply",
       "send_hex": [
-        "424201010003",
-        "000100"
+        "424201010003000100"
       ],
       "expect_hex": "424201ff000104"
     },
     {
       "id": "sum-trailing-bytes-ignored",
-      "description": "Bytes after one complete request are drained, not answered",
+      "description": "Trailing bytes in the same write as one complete request are drained, not answered",
       "send_hex": [
-        "4242010100020005",
-        "ffff"
+        "4242010100020005ffff"
       ],
       "expect_hex": "42420181000400000005"
     }
