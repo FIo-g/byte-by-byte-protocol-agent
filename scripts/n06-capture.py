@@ -30,6 +30,12 @@ def git(*args):
     return subprocess.check_output(["git", "-C", str(REPO), *args], text=True).strip()
 
 
+def count(pcap, expr):
+    # Returns the number of packets tcpdump prints for the filter; a partial pcap is read as-is.
+    out = subprocess.run(["tcpdump", "-nn", "-r", str(pcap), expr], capture_output=True, text=True).stdout
+    return len([line for line in out.splitlines() if line.strip()])
+
+
 def stop(process):
     if process.poll() is None:
         process.terminate()
@@ -42,6 +48,7 @@ def stop(process):
 
 
 def main():
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     if len(sys.argv) != 4:
         print("Usage: python3 scripts/n06-capture.py <server-binary> <client-binary> <new-result.json>")
         return 2
@@ -89,7 +96,7 @@ def main():
                 time.sleep(0.02)
 
         result["stage"] = "tcpdump_start"
-        tcpdump_cmd = ["tcpdump", "-i", "lo", "-p", "-n", "-U", "-s", "0", "-Z", "root",
+        tcpdump_cmd = ["tcpdump", "-i", "lo", "-p", "-n", "-U", "--immediate-mode", "-s", "0", "-Z", "root",
                        "-w", str(pcap), f"tcp port {port}"]
         result["tcpdump_command"] = tcpdump_cmd
         tcpdump_log = target.parent / (target.name + ".tcpdump.stderr")
@@ -113,8 +120,17 @@ def main():
             if run.returncode != 0 or run.stdout != f"sum={expected}\n":
                 raise RuntimeError(f"Client session did not match expected sum: {args}")
 
-        # shortcut: fixed wait because SIGINT drops packets still held in the kernel capture block; 0.5 s lost them under Docker Desktop, 2 s captured all, so upgrade to an explicit end marker if this flakes.
-        time.sleep(2)
+        # Immediate mode avoids libpcap's ~1 s TPACKET_V3 block hold-back; polling waits for the last FIN/ACK.
+        deadline = time.monotonic() + 5
+        previous = None
+        while True:
+            total = count(pcap, "tcp")
+            if count(pcap, "tcp[tcpflags] & tcp-fin != 0") >= 2 * len(SESSIONS) and total == previous:
+                break
+            if time.monotonic() > deadline:
+                raise TimeoutError("pcap did not reach the expected FIN count within 5 seconds")
+            previous = total
+            time.sleep(0.1)
         tcpdump.send_signal(signal.SIGINT)
         try:
             tcpdump.wait(timeout=5)
@@ -127,18 +143,18 @@ def main():
         result["packets_captured"] = int(match.group(1))
 
         result["stage"] = "verify"
-        syn = subprocess.run(["tcpdump", "-nn", "-r", str(pcap),
-                              "tcp[tcpflags] & (tcp-syn|tcp-ack) == tcp-syn"],
-                             capture_output=True, text=True, check=True)
-        result["syn_count"] = len([line for line in syn.stdout.splitlines() if line.strip()])
+        result["syn_count"] = count(pcap, "tcp[tcpflags] & (tcp-syn|tcp-ack) == tcp-syn")
+        result["fin_count"] = count(pcap, "tcp[tcpflags] & tcp-fin != 0")
         if result["syn_count"] != len(SESSIONS):
             raise RuntimeError(f"Expected {len(SESSIONS)} SYN packets, saw {result['syn_count']}")
+        if result["fin_count"] != 2 * len(SESSIONS):
+            raise RuntimeError(f"Expected {2 * len(SESSIONS)} FIN packets, saw {result['fin_count']}")
         if sha256(server_bin) != result["inputs"]["server"]["sha256"] or \
                 sha256(client_bin) != result["inputs"]["client"]["sha256"]:
             raise RuntimeError("Practice binary changed during capture")
         result["pcap"] = {"path": str(pcap), "sha256": sha256(pcap), "bytes": pcap.stat().st_size}
         result.update(success=True, stage="complete")
-    except Exception as error:
+    except BaseException as error:
         result["error"] = {"type": type(error).__name__, "message": str(error)}
     finally:
         if tcpdump is not None:

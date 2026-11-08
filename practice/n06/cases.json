@@ -125,6 +125,72 @@
       ],
       "expect": "",
       "half_close": true
+    },
+    {
+      "id": "error-precedence-magic-over-version",
+      "description": "Bad magic wins over bad version/type/length",
+      "send_hex": [
+        "414202020003"
+      ],
+      "expect_hex": "424201ff000101"
+    },
+    {
+      "id": "error-precedence-version-over-type",
+      "description": "Bad version wins over bad type/length",
+      "send_hex": [
+        "424202020003"
+      ],
+      "expect_hex": "424201ff000102"
+    },
+    {
+      "id": "error-precedence-type-over-length",
+      "description": "Bad type wins over odd length",
+      "send_hex": [
+        "424201020003"
+      ],
+      "expect_hex": "424201ff000103"
+    },
+    {
+      "id": "error-odd-length-over-64",
+      "description": "Length 65 is odd and too long",
+      "send_hex": [
+        "424201010041"
+      ],
+      "expect_hex": "424201ff000104"
+    },
+    {
+      "id": "error-length-ffff",
+      "description": "Length 65535 is rejected without reading a payload",
+      "send_hex": [
+        "42420101ffff"
+      ],
+      "expect_hex": "424201ff000104"
+    },
+    {
+      "id": "error-bad-magic-payload-not-sent",
+      "description": "Bad magic is answered before any payload arrives",
+      "send_hex": [
+        "414201010004"
+      ],
+      "expect_hex": "424201ff000101"
+    },
+    {
+      "id": "error-odd-length-payload-sent",
+      "description": "Rejected header followed by payload bytes; the server drains them and closes cleanly",
+      "send_hex": [
+        "424201010003",
+        "000100"
+      ],
+      "expect_hex": "424201ff000104"
+    },
+    {
+      "id": "sum-trailing-bytes-ignored",
+      "description": "Bytes after one complete request are drained, not answered",
+      "send_hex": [
+        "4242010100020005",
+        "ffff"
+      ],
+      "expect_hex": "42420181000400000005"
     }
   ]
 }
