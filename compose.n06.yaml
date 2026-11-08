@@ -1,0 +1,11 @@
+services:
+  n06:
+    image: byte-by-byte-n06:rea6.8.0-tcpdump
+    build:
+      context: ./infra/n06
+    init: true
+    working_dir: /work
+    volumes:
+      - .:/work:ro
+      - ./runs:/work/runs
+    command: ["bash"]

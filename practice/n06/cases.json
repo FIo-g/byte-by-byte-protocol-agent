@@ -1,0 +1,130 @@
+{
+  "name": "n06-practice-known-spec",
+  "description": "Expected responses of the N02/N06 practice SUM server, taken from practice/n06/README.md. Known practice protocol; practice results are not experiment scores.",
+  "spec_source": "practice/n06/README.md",
+  "defaults": {
+    "timeout_s": 3,
+    "chunk_delay_ms": 20
+  },
+  "cases": [
+    {
+      "id": "sum-three-values",
+      "description": "SUM 1+2+3 in one write",
+      "send_hex": [
+        "424201010006000100020003"
+      ],
+      "expect_hex": "42420181000400000006"
+    },
+    {
+      "id": "sum-split-header-payload",
+      "description": "Same request split across five writes",
+      "send_hex": [
+        "4242",
+        "0101",
+        "0006",
+        "0001",
+        "00020003"
+      ],
+      "expect_hex": "42420181000400000006"
+    },
+    {
+      "id": "sum-byte-by-byte",
+      "description": "SUM 10+20 sent one byte per write",
+      "send_hex": [
+        "42",
+        "42",
+        "01",
+        "01",
+        "00",
+        "04",
+        "00",
+        "0a",
+        "00",
+        "14"
+      ],
+      "expect_hex": "4242018100040000001e"
+    },
+    {
+      "id": "sum-max-values",
+      "description": "65535+65535 = 131070",
+      "send_hex": [
+        "424201010004ffffffff"
+      ],
+      "expect_hex": "4242018100040001fffe"
+    },
+    {
+      "id": "sum-empty-payload",
+      "description": "Zero numbers sum to 0",
+      "send_hex": [
+        "424201010000"
+      ],
+      "expect_hex": "42420181000400000000"
+    },
+    {
+      "id": "sum-32-values",
+      "description": "Maximum 64-byte payload: 32 x 65535 = 2097120",
+      "send_hex": [
+        "424201010040ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      ],
+      "expect_hex": "424201810004001fffe0"
+    },
+    {
+      "id": "error-bad-magic",
+      "description": "Wrong magic is rejected after the header",
+      "send_hex": [
+        "414201010000"
+      ],
+      "expect_hex": "424201ff000101"
+    },
+    {
+      "id": "error-bad-version",
+      "description": "Version 2 is rejected",
+      "send_hex": [
+        "424202010000"
+      ],
+      "expect_hex": "424201ff000102"
+    },
+    {
+      "id": "error-unknown-type",
+      "description": "Type 0x02 is not a command",
+      "send_hex": [
+        "424201020000"
+      ],
+      "expect_hex": "424201ff000103"
+    },
+    {
+      "id": "error-odd-length",
+      "description": "Odd length is rejected right after the header (payload not sent)",
+      "send_hex": [
+        "424201010003"
+      ],
+      "expect_hex": "424201ff000104"
+    },
+    {
+      "id": "error-length-over-64",
+      "description": "Length 66 exceeds the 64-byte limit (payload not sent)",
+      "send_hex": [
+        "424201010042"
+      ],
+      "expect_hex": "424201ff000104"
+    },
+    {
+      "id": "eof-mid-header",
+      "description": "Client half-closes inside the header; no response",
+      "send_hex": [
+        "4242"
+      ],
+      "expect": "",
+      "half_close": true
+    },
+    {
+      "id": "eof-mid-payload",
+      "description": "Client half-closes inside the payload; no response",
+      "send_hex": [
+        "4242010100040001"
+      ],
+      "expect": "",
+      "half_close": true
+    }
+  ]
+}
