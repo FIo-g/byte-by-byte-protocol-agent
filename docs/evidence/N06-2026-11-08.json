@@ -11,6 +11,7 @@
   "commits": {
     "N02_fix": "76eb788",
     "N06_fix": "00de702",
+    "N06_cases_fix": "2844a05",
     "N06_base": "37ae529"
   },
   "environment": {
@@ -44,8 +45,9 @@
     },
     "cases": {
       "file": "practice/n06/cases.json",
-      "sha256": "995166749099049fbbe79a80392986dd2d875d548e9479341c522feb3ddc1883",
-      "cases": 21
+      "sha256": "375630c1630bfddaabc45c7b03a20a14ec3bc1ee1abe29a0ce57171c04a8fc60",
+      "cases": 21,
+      "superseded_sha256": "995166749099049fbbe79a80392986dd2d875d548e9479341c522feb3ddc1883"
     }
   },
   "run_time_kst": {
@@ -174,7 +176,19 @@
       "success": true,
       "exit_code": 0,
       "server_stopped": true,
-      "server_exit_code_during_eval": null
+      "server_exit_code_during_eval": null,
+      "superseded_run_tag_20261108_204702": {
+        "summary": {
+          "total": 21,
+          "pass": 21,
+          "fail": 0,
+          "error": 0,
+          "pass_rate": 1.0,
+          "all_pass": true
+        },
+        "note": "케이스 수정 전 cases.json, 대체됨"
+      },
+      "run_tag": "20261108-210230"
     },
     "mutated": {
       "change": "sum-three-values expect_hex last byte 06 -> 07",
@@ -197,7 +211,62 @@
           "expected_hex": "42420181000400000007",
           "actual_hex": "42420181000400000006"
         }
-      ]
+      ],
+      "run_tag": "20261108-210230",
+      "cases_file": "runs/n06/cases-mutated-20261108-210230.json",
+      "cases_sha256": "1fbd4cbcfdb01ac9cda27982ac80919ae7e46e94588fd54f38b00d8edd3d022b",
+      "superseded_run_tag_20261108_204702": "음성 대조군 eval-mutated-20261108-204702 (케이스 수정 전, 대체됨)"
+    },
+    "code_commit": "2844a056bc8c881733ee119a32bba078e0c96dbc",
+    "run_tag": "20261108-210230",
+    "prefix_regression": {
+      "run_tag": "20261108-210230",
+      "server_source_commit": "37ae529",
+      "server_file": "runs/n06/prefix-server",
+      "server_sha256": "15826881e929f5b5690851221f91d2fee2e9100eef7abeb81758d7307a9c3009",
+      "cases_sha256": "375630c1630bfddaabc45c7b03a20a14ec3bc1ee1abe29a0ce57171c04a8fc60",
+      "summary": {
+        "total": 21,
+        "pass": 19,
+        "fail": 0,
+        "error": 2,
+        "pass_rate": 0.9048,
+        "all_pass": false
+      },
+      "exit_code": 1,
+      "errors": [
+        {
+          "case_id": "error-odd-length-payload-sent",
+          "verdict": "error",
+          "error": "ConnectionResetError"
+        },
+        {
+          "case_id": "sum-trailing-bytes-ignored",
+          "verdict": "error",
+          "error": "ConnectionResetError"
+        }
+      ],
+      "expected_result": "두 drain 케이스가 ConnectionResetError, 나머지 19개 pass"
+    },
+    "clean_clone_check": {
+      "run_tag": "20261108-210423",
+      "code_commit": "2844a056bc8c881733ee119a32bba078e0c96dbc",
+      "steps": "재빌드(서버·클라이언트), 캡처, 평가기, REA 단독",
+      "server_sha256": "d6cd6d971030e34601c2953fd71eceef7ac4fab0c8f0dde285a51a04ab040067",
+      "client_sha256": "0ad87f81537ee489e4bb0cc80eb6878e3353f6b4d6f6fab073e4581cd23588cf",
+      "capture_success": true,
+      "capture_pcap_sha256": "c52dc20bd00ba295d4da0693fc4dfb9ab892f123b1fbfe5d297778696bcfd148",
+      "evaluator_summary": {
+        "total": 21,
+        "pass": 21,
+        "fail": 0,
+        "error": 0,
+        "pass_rate": 1.0,
+        "all_pass": true
+      },
+      "rea_success": true,
+      "rea_input_sha256_match": true,
+      "note": "PCAP 해시는 실행마다 다르다. 클론은 저장소 밖 임시 폴더에 있었고 보존하지 않음"
     }
   },
   "rea": {
@@ -222,20 +291,52 @@
     "status": "pending",
     "note": "김태형 본인 확인 대기 (AI 실행은 본인 확인이 아님)"
   },
-  "cross_machine_hash_check": "not done",
+  "cross_machine_hash_check": "not done (다른 PC 미확인; 클린 clone 1회는 done)",
   "local_raw": {
     "runs/n06/capture-20261108-204702-a.json": "b92a3367031fc6447152e18374c2300d6a0024cd90a2b0820d9995903e31b8a0",
     "runs/n06/capture-20261108-204702-b.json": "33c52c136d789c18bd3ec881b39d8962f4092976996084d96773c0f6b98fde59",
     "runs/n06/capture-20261108-204702-c.json": "5c185dc20e85ed63885a6650aa13a0ac70c37673e7b72948afeb5bd01b57abf0",
     "runs/n06/capture-20261108-204702-a.pcap": "e9b5650cd8aab5f0480a1b99740af67e7713f5083f5a58c0acaa5535207bd698",
     "runs/n06/capture-20261108-204702-a.pcap.txt": "47710f33d4f2804a7cef7e97537709b939c5746e9ffcef2aac90e56ce70dccc8",
-    "runs/n06/eval-20261108-204702.json": "7bbb3389daf89795d9a6bcb58041e64f8314d54d88e2e16d7c0e4e0260489581",
-    "runs/n06/eval-20261108-204702.csv": "c58622bb8c8e3abf2a7d615bd2fc6b49d13436da1384c87e30f20f10dd0df6d5",
-    "runs/n06/eval-mutated-20261108-204702.json": "4b1b9590537c2affb5b609eca85109ab05391e078c84091c69cda99f09089a2d",
-    "runs/n06/eval-mutated-20261108-204702.csv": "6f3cdb297125112d97a93ea36cdb5cf9c566a4b784b8bd7fffde35dce34528b0",
-    "runs/n06/cases-mutated-20261108-204702.json": "8e4802a184b8fb6dcf7547b0d9c6a53c37517caceb7df157f422d992fd475af4",
+    "runs/n06/eval-20261108-204702.json (superseded: cases changed)": "7bbb3389daf89795d9a6bcb58041e64f8314d54d88e2e16d7c0e4e0260489581",
+    "runs/n06/eval-20261108-204702.csv (superseded: cases changed)": "c58622bb8c8e3abf2a7d615bd2fc6b49d13436da1384c87e30f20f10dd0df6d5",
+    "runs/n06/eval-mutated-20261108-204702.json (superseded: cases changed)": "4b1b9590537c2affb5b609eca85109ab05391e078c84091c69cda99f09089a2d",
+    "runs/n06/eval-mutated-20261108-204702.csv (superseded: cases changed)": "6f3cdb297125112d97a93ea36cdb5cf9c566a4b784b8bd7fffde35dce34528b0",
+    "runs/n06/cases-mutated-20261108-204702.json (superseded: cases changed)": "8e4802a184b8fb6dcf7547b0d9c6a53c37517caceb7df157f422d992fd475af4",
     "runs/n06/rea-20261108-204702.json": "f5e41236c306524395563272b2ce7b88ec10d67bbae15bbf2d44ac25c08a873b",
     "runs/n06/dry2-capture.json": "f2432152dfae07aa0b93bdf3bc9527113561d7a9d54d4cddb18b0f2001515008",
-    "runs/n06/dry2-eval.json": "f2765d56c0d7d896eae395c342a722112b6f5bd2b1384f2706df494f7b624f7a"
+    "runs/n06/dry2-eval.json": "f2765d56c0d7d896eae395c342a722112b6f5bd2b1384f2706df494f7b624f7a",
+    "runs/n06/eval-20261108-210230.json": "247aac18c9b69735ab946a70ebb6660b41420c4db97cddfeaad6af3e2c1ffee1",
+    "runs/n06/eval-20261108-210230.csv": "c29311e727ee334889fa73d8912d8594605908bb89571794c986b942ed29318d",
+    "runs/n06/eval-20261108-210230.json.server.stderr": "b77864f540b8747cc7f780c98540e57c6e2f45b6cf1ba0f67da783326588bc65",
+    "runs/n06/eval-mutated-20261108-210230.json": "8060a1591890158c5555a49affac135e1a4b0f0a0d5232ebe0c54982a9b83f74",
+    "runs/n06/eval-mutated-20261108-210230.csv": "4d58f0f8208faebe7bb5cfd413db62c681a7f93831d631088fab6a919cca5916",
+    "runs/n06/cases-mutated-20261108-210230.json": "1fbd4cbcfdb01ac9cda27982ac80919ae7e46e94588fd54f38b00d8edd3d022b",
+    "runs/n06/eval-prefix-20261108-210230.json": "db0f1ba53cd0f8017bb45f94fc80f26df3b987f906a33e56615682082190a234",
+    "runs/n06/eval-prefix-20261108-210230.csv": "40b7450263fafc94224f108257afb2aded6b82ef209c72f5017de784744e3e3c",
+    "runs/n06/prefix-server.c": "118bae7300a98b34519ce8258e6eac7eeac8964ffdd77e47a60f3ee08e50ded9",
+    "runs/n06/prefix-server": "15826881e929f5b5690851221f91d2fee2e9100eef7abeb81758d7307a9c3009",
+    "first_attempt_note": "태그 20261108-203159, 커밋 37ae529, 케이스 13개, 서버 sha aceab521…는 리뷰 지적으로 대체되어 로컬에만 보관"
+  },
+  "source": "팀 노션의 N02·N06 정의와 N07 하위 페이지의 '요청 → 기대 응답' 목록 요청(2026-11-08 읽기 전용 확인), 저장소 주간 기록",
+  "run_tag_evaluator": "20261108-210230",
+  "run_tag_clean_clone": "20261108-210423",
+  "code_commits_by_step": {
+    "capture_x3_and_rea": {
+      "commit": "00de702c0f870a4a8df43a070c20b355bdf8ef48",
+      "code_dirty": false,
+      "tag": "20261108-204702"
+    },
+    "evaluator_mutated_prefix": {
+      "commit": "2844a056bc8c881733ee119a32bba078e0c96dbc",
+      "code_dirty": false,
+      "tag": "20261108-210230"
+    },
+    "dry2_precheck": {
+      "commit": "37ae529",
+      "code_dirty": true,
+      "committed": false,
+      "note": "미커밋 수정 상태에서 실행"
+    }
   }
 }

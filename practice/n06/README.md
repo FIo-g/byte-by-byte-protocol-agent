@@ -13,6 +13,8 @@
 | `scripts/n06-capture.py` | 서버 기동, 정상 5세션 실행, tcpdump 캡처, 검증과 JSON 기록 |
 | `compose.n06.yaml`, `infra/n06/Dockerfile` | N05 이미지에 tcpdump를 더한 N06 실행 환경 |
 
+이 PCAP은 N06 공개 산출물이라 의도적으로 커밋한다. 원본 캡처·로그는 `runs/n06/`에만 있다. 확인: `sha256sum practice/n06/normal-sessions.pcap` (위 해시와 같아야 함). 열람: `docker compose -f compose.n06.yaml run --rm n06 tcpdump -nn -r practice/n06/normal-sessions.pcap`. 서버 포트 39455, 클라이언트 포트 47780~47826.
+
 ## 프로토콜 명세
 
 요청 프레임 (모든 정수는 빅엔디언)
@@ -49,9 +51,9 @@
 - 연결 하나당 요청 하나를 처리하고 응답 뒤 연결을 닫는다.
 - 헤더 6바이트는 `recv`가 여러 번에 나뉘어 와도 모두 모을 때까지 읽는다. payload도 같은 방식으로 length만큼 모은다.
 - 검사 순서는 magic → version → type → length다. 헤더 6바이트를 다 읽은 뒤 검사한다.
-- length 검사에 실패하면 payload를 읽기 전에 오류 프레임을 보낸다.
+- 헤더 검사(magic·version·type·length) 중 하나라도 실패하면 payload를 읽지 않고 바로 오류 프레임을 보낸다.
 - 헤더나 payload 도중 연결이 끊기면(EOF) 응답하지 않고 닫는다.
-- 요청 처리가 끝나면(응답을 보낸 경우와 EOF로 응답 없이 끝난 경우 모두) 서버는 쓰기 방향을 닫고(`SHUT_WR`), 남은 수신 바이트를 최대 16번 읽는다. 읽기 한 번당 대기는 1초다. 이렇게 해야 읽지 않은 바이트 때문에 `close()`가 RST를 보내 응답이 사라지는 일을 피한다.
+- 요청 처리가 끝나면(응답을 보낸 경우와 EOF로 응답 없이 끝난 경우 모두) 서버는 쓰기 방향을 닫고(`SHUT_WR`), 남은 수신 바이트를 최대 16번 읽는다. 읽기 한 번당 대기는 1초다. 이렇게 해야 읽지 않은 바이트 때문에 `close()`가 RST를 보내 응답이 사라지는 일을 피한다. 응답 뒤 클라이언트가 연결을 닫지 않으면 서버는 최대 1초(데이터를 계속 보내면 최대 약 16초) 더 붙잡힌다.
 - 요청은 한 번에 하나씩 순서대로 처리한다. 루프백(`127.0.0.1`)에만 바인드한다.
 
 ## 요청 → 기대 응답 (대표)
@@ -66,13 +68,13 @@
 | `sum-max-values` | `424201010004ffffffff` | `4242018100040001fffe` | 65535+65535 |
 | `sum-empty-payload` | `424201010000` | `42420181000400000000` | 빈 payload의 합은 0 |
 | `sum-32-values` | length `0x0040`, 32개 `ffff` | `424201810004001fffe0` | 최대 payload, 합 2097120 |
-| `sum-trailing-bytes-ignored` | `4242010100020005` + `ffff` | `42420181000400000005` | 한 요청 뒤 바이트는 응답하지 않고 버림 |
+| `sum-trailing-bytes-ignored` | `4242010100020005ffff` (한 번에 전송) | `42420181000400000005` | 한 요청 뒤 바이트는 응답하지 않고 버림 |
 | `error-bad-magic` | `414201010000` | `424201ff000101` | |
 | `error-precedence-magic-over-version` | `414202020003` | `424201ff000101` | magic이 version보다 먼저 |
 | `error-unknown-type` | `424201020000` | `424201ff000103` | |
 | `error-odd-length` | `424201010003` | `424201ff000104` | payload를 보내지 않아도 응답 |
 | `error-length-ffff` | `42420101ffff` | `424201ff000104` | 65535 길이는 payload를 읽지 않고 거부 |
-| `error-odd-length-payload-sent` | `424201010003` + `000100` | `424201ff000104` | 거부 뒤 payload는 버리고 정상 종료 |
+| `error-odd-length-payload-sent` | `424201010003000100` (한 번에 전송) | `424201ff000104` | 거부 뒤 같은 쓰기에 붙은 payload는 버리고 RST 없이 종료 |
 | `eof-mid-header` | `4242` 후 쓰기 종료 | (없음) | 응답 없이 종료 |
 | `eof-mid-payload` | `4242010100040001` 후 쓰기 종료 | (없음) | 응답 없이 종료 |
 
@@ -127,6 +129,14 @@ runs/n06/practice-client 19006 1 2 3
 
 기대 출력: `sum=6` (종료 코드 0).
 
+Docker Desktop(PowerShell)에서는 빌드한 파일이 Linux 실행 파일이라 호스트에서 직접 실행되지 않고, `docker compose run`을 두 번 하면 서로 다른 컨테이너라 루프백을 공유하지 않는다. 한 컨테이너에서 서버와 클라이언트를 함께 실행한다.
+
+```sh
+docker compose -f compose.n05.yaml run --rm n05 sh -c 'runs/n06/practice-server 19006 & sleep 1; runs/n06/practice-client 19006 1 2 3; kill $!'
+```
+
+기대 출력: 서버 배너 한 줄과 `sum=6`.
+
 - 인자는 `<port> <n1> [n2 ... n32]`다. 숫자는 0~65535 정수, 1~32개.
 - 서버가 오류 프레임을 보내면 표준 오류에 `error=<code>`를 10진수로 출력하고 종료 코드 1.
 - 사용법 오류(인자 개수, 범위 밖 값, 잘못된 포트)는 사용법을 출력하고 종료 코드 2.
@@ -141,6 +151,8 @@ docker compose -f compose.n06.yaml build n06
 tag=$(date +%Y%m%d-%H%M%S)
 docker compose -f compose.n06.yaml run --rm n06 python3 scripts/n06-capture.py runs/n06/practice-server runs/n06/practice-client runs/n06/capture-$tag.json
 ```
+
+PowerShell에서는 `tag=...` 줄 대신 `$tag = Get-Date -Format yyyyMMdd-HHmmss`를 쓴다. 팀원 연결 절의 `$tag`도 같은 값이다.
 
 스크립트가 하는 일:
 
@@ -166,15 +178,19 @@ PCAP에는 정상 세션만 있다. 오류 응답 케이스는 PCAP에 없다.
 
 - N05 (REA 단독 분석): `docker compose -f compose.n05.yaml run --rm n05 node scripts/rea-smoke.mjs --rea-only runs/n06/practice-server runs/n06/rea-$tag.json`
 - N07 (기대/실제 평가): `docker compose -f compose.n05.yaml run --rm n05 python3 scripts/n07-evaluate.py --cases practice/n06/cases.json --binary runs/n06/practice-server --out runs/n06/eval-$tag.json`. 기대 결과는 21/21 pass, 종료 코드 0.
-- N08 (클라이언트와 웹): `client.c`를 참고 구현으로 쓰고, 위 요청→응답 표를 화면 검증 기준으로 쓴다.
+- N08 (클라이언트와 웹): `client.c`를 참고 구현으로 쓰고, 위 요청→응답 표를 화면 검증 기준으로 쓴다. 서버는 루프백 전용이라 Docker 컨테이너에서 `-p`로 포트를 열어도 호스트의 웹앱이 접속할 수 없다(2026-11-08 AI 확인: 연결은 되지만 응답 없이 닫힘). WSL/Linux에서 직접 실행하고, WSL 서버에 Windows 쪽 웹앱이 접속되는지는 확인 필요.
 
 ## 분석 연습 시 주의
 
 블라인드 분석 연습(패킷만 / 패킷+바이너리)에서는 모델에 PCAP만 주고, 두 번째 조건에서만 바이너리를 준다. 이 README, 소스, `cases.json`은 모델에 주지 않는다. 오류 코드(`0x01`~`0x04`)는 PCAP에 나타나지 않고 바이너리에만 있으므로, 두 조건은 복원할 수 있는 내용이 다르다.
 
+## 발표에서 설명할 핵심
+
+연습 프로토콜은 정답이 공개된 예제라 본 실험 점수가 아니다. PCAP에는 정상 요청만 있어 오류 코드는 바이너리에서만 복원된다. 21/21 pass는 서버가 같은 사람이 쓴 명세와 일치한다는 뜻이다. TCP는 메시지 경계가 없어 헤더·payload를 모아 읽어야 하고, 읽지 않은 바이트를 둔 채 닫으면 RST가 나갈 수 있다.
+
 ## 한계
 
-- 순차 처리 단일 요청 서비스다. 동시 접속, 부하, 유휴 시간 제한(idle timeout)은 측정하지 않았다.
+- 서버에는 요청 수신 중 유휴 시간 제한이 없다. 헤더나 payload를 덜 보내고 멈춘 클라이언트가 있으면 서버가 그 연결을 계속 기다려 다른 연결이 처리되지 않는다(응답 뒤 drain만 읽기당 1초, 최대 16회). 동시 접속과 부하는 측정하지 않았다.
 - 루프백에서만 실행했다. PCAP의 타임스탬프와 포트는 그 실행의 값이다.
 - Mac arm64 호스트에서 amd64 에뮬레이션으로 빌드·실행했다. 다른 호스트에서의 바이너리 해시 일치는 확인하지 않았다.
 - 실행 증거와 AI 검증 범위는 [docs/evidence/N06-2026-11-08.md](../../docs/evidence/N06-2026-11-08.md)에 있다. AI 검증은 본인 확인이 아니다.
