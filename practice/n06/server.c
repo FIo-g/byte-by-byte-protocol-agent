@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 static int send_all(int fd, const unsigned char *message, size_t length) {
@@ -63,6 +64,15 @@ static void handle_request(int client) {
     (void)send_all(client, reply, sizeof(reply));
 }
 
+/* Unread bytes make close() send RST, which can destroy the reply already sent. */
+static void drain_peer(int client) {
+    unsigned char sink[256];
+    struct timeval timeout = {1, 0};
+    shutdown(client, SHUT_WR);
+    setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    for (int i = 0; i < 16 && recv(client, sink, sizeof(sink), 0) > 0; i++) {}
+}
+
 int main(int argc, char **argv) {
     long port = 19006;
     if (argc > 2) {
@@ -98,9 +108,10 @@ int main(int argc, char **argv) {
 
     for (;;) {
         int client = accept(listener, NULL, NULL);
-        if (client < 0 && errno == EINTR) continue;
+        if (client < 0 && (errno == EINTR || errno == ECONNABORTED)) continue;
         if (client < 0) { perror("accept"); close(listener); return 1; }
         handle_request(client);
+        drain_peer(client);
         close(client);
     }
 }

@@ -32,7 +32,7 @@ static int parse_long(const char *text, long low, long high, long *value) {
 
 int main(int argc, char **argv) {
     long port = 0;
-    if (argc < 3 || argc > 33 || !parse_long(argv[1], 1, 65535, &port)) {
+    if (argc < 3 || argc > 34 || !parse_long(argv[1], 1, 65535, &port)) {
         usage(argv[0]);
         return 2;
     }
