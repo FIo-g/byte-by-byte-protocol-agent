@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location("n07_evaluate", ROOT / "scripts" / "n07-evaluate.py")
@@ -225,6 +226,40 @@ class ExchangeTest(unittest.TestCase):
         self.assertEqual(outcome["error"]["type"], "timeout")
         self.assertLess(outcome["elapsed_ms"], 1500)
         self.assertTrue(outcome["actual"].startswith(b"A"))
+
+    def test_timeout_bounds_chunk_delay(self):
+        slow = case(chunks=[b"P", b"ING\n"], timeout_s=0.1, chunk_delay_ms=800)
+        outcome = n07.exchange("127.0.0.1", self.server.port, slow)
+        self.assertEqual(outcome["error"]["type"], "timeout")
+        self.assertLess(outcome["elapsed_ms"], 500)
+
+    def test_send_uses_only_remaining_case_budget(self):
+        # Simulate a slow socket without depending on OS send-buffer sizes or timing.
+        clock = [0.0]
+        timeout = [None]
+        completed = []
+        durations = iter((0.3, 0.8))
+        connection = mock.MagicMock()
+        connection.__enter__.return_value = connection
+        connection.settimeout.side_effect = lambda value: timeout.__setitem__(0, value)
+
+        def send(chunk):
+            duration = next(durations)
+            if duration > timeout[0]:
+                clock[0] += timeout[0]
+                raise socket.timeout()
+            clock[0] += duration
+            completed.append(chunk)
+
+        connection.sendall.side_effect = send
+        slow = case(chunks=[b"P", b"ING\n"], timeout_s=1, chunk_delay_ms=200)
+        with (mock.patch.object(n07.socket, "create_connection", return_value=connection),
+              mock.patch.object(n07.time, "monotonic", side_effect=lambda: clock[0]),
+              mock.patch.object(n07.time, "sleep", side_effect=lambda delay: clock.__setitem__(0, clock[0] + delay))):
+            outcome = n07.exchange("127.0.0.1", 19005, slow)
+        self.assertEqual(outcome["error"]["type"], "timeout")
+        self.assertEqual(outcome["elapsed_ms"], 1000)
+        self.assertEqual(completed, [b"P"])
 
     def test_connection_refused_is_error(self):
         result = n07.judge(case(), n07.exchange("127.0.0.1", n07.free_port(), case()))

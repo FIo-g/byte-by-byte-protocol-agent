@@ -9,3 +9,5 @@ LLM- and REA-assisted reconstruction of custom TCP protocols, with compatible cl
 - [N02/N06 practice SUM protocol, capture and cases](practice/n06/README.md)
 - [N06 observed results (2026-11-08)](docs/evidence/N06-2026-11-08.md)
 - [Task, evidence and contribution rules](CONTRIBUTING.md)
+- [N05–N07 integration handoff](docs/integration-handoff.md)
+- [Windows Docker integration evidence (2026-11-09)](docs/evidence/N05-N07-integration-2026-11-09.md)
