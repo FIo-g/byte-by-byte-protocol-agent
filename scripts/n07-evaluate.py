@@ -131,18 +131,23 @@ def exchange(host, port, case):
             deadline = time.monotonic() + case["timeout_s"]
             with connection:
                 connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                connection.settimeout(case["timeout_s"])
-                for index, chunk in enumerate(case["chunks"]):
-                    if index:
-                        time.sleep(case["chunk_delay_ms"] / 1000)
-                    connection.sendall(chunk)
-                if case["half_close"]:
-                    connection.shutdown(socket.SHUT_WR)
-                while True:
+
+                def remaining_time():
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         raise socket.timeout()
-                    connection.settimeout(remaining)
+                    return remaining
+
+                for index, chunk in enumerate(case["chunks"]):
+                    if index:
+                        time.sleep(min(case["chunk_delay_ms"] / 1000, remaining_time()))
+                    connection.settimeout(remaining_time())
+                    connection.sendall(chunk)
+                if case["half_close"]:
+                    connection.settimeout(remaining_time())
+                    connection.shutdown(socket.SHUT_WR)
+                while True:
+                    connection.settimeout(remaining_time())
                     chunk = connection.recv(1024)
                     if not chunk:
                         outcome["server_closed"] = True
