@@ -1,0 +1,179 @@
+{
+  "task": "N05/N06/N07 integration",
+  "date_kst": "2026-11-09",
+  "performed_by": "Codex on the requesting team member Windows x86-64 host using Docker Linux containers",
+  "classification": "public practice reproduction; not an experiment score",
+  "experiment_score": false,
+  "author_manual_confirmation": false,
+  "n05_complete": false,
+  "pending": [
+    "Designated course model endpoint/model ID/API credentials",
+    "Real model tool call -> REA -> matching call ID -> model summary",
+    "Author review of claim meaning",
+    "N08 client/web integration",
+    "N09 A/B implementation"
+  ],
+  "merged_prs": [
+    {
+      "number": 1,
+      "sha": "b9a50ba188e60a6fdcbb8818e37f87486caf6c95"
+    },
+    {
+      "number": 2,
+      "sha": "162e3d30c8ab8385ad24dae3920555f675a18475"
+    },
+    {
+      "number": 3,
+      "sha": "b0bfb8bfa3f95ad8111e84e735b8ada5c82aaec0"
+    }
+  ],
+  "environment": {
+    "host": "Windows x86-64",
+    "docker_engine": "29.7.2",
+    "n05_image_id": "sha256:d6b4343fc6a4b2c2d959e2bd8f0d327621e6156e6c9b0d1b3f507be4cf47df7b",
+    "gcc": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+    "python": "3.12.3",
+    "node": "v24.22.1",
+    "tcpdump": "tcpdump version 4.99.4"
+  },
+  "input_artifacts": [
+    {
+      "path": "runs/n06/practice-server",
+      "sha256": "d6cd6d971030e34601c2953fd71eceef7ac4fab0c8f0dde285a51a04ab040067"
+    },
+    {
+      "path": "runs/n06/practice-client",
+      "sha256": "0ad87f81537ee489e4bb0cc80eb6878e3353f6b4d6f6fab073e4581cd23588cf"
+    },
+    {
+      "path": "practice/n06/normal-sessions.pcap",
+      "sha256": "e9b5650cd8aab5f0480a1b99740af67e7713f5083f5a58c0acaa5535207bd698"
+    }
+  ],
+  "initial_tests": {
+    "code_commit": "0ac1666dd690771bc4660967e02ae27a3ac1b124",
+    "code_dirty": false,
+    "node_passed": 25,
+    "python_passed": 19,
+    "logs": [
+      {
+        "path": "runs/n06/integration-20261109-n05.tap",
+        "sha256": "8107c25ace8e2082a88144f8bf74be7b7fe0b6c920063feb50a780e14f7c73cf"
+      },
+      {
+        "path": "runs/n06/integration-20261109-n07-tests.txt",
+        "sha256": "b48949ed37bb4775985e0d1817625847bc4c81d6bcec574973fe90467dbbb356"
+      }
+    ]
+  },
+  "n06_evaluation": {
+    "path": "runs/n06/integration-20261109-eval-clean.json",
+    "sha256": "f39702b66976828e8b0f8bd3fb29b86febb8cd50723ec3d3dd81c83ce60ea6f9",
+    "code_commit": "0ac1666dd690771bc4660967e02ae27a3ac1b124",
+    "code_dirty": false,
+    "summary": {
+      "total": 21,
+      "pass": 21,
+      "fail": 0,
+      "error": 0,
+      "pass_rate": 1,
+      "all_pass": true
+    },
+    "input_sha256": "d6cd6d971030e34601c2953fd71eceef7ac4fab0c8f0dde285a51a04ab040067",
+    "cases_sha256": "375630c1630bfddaabc45c7b03a20a14ec3bc1ee1abe29a0ce57171c04a8fc60",
+    "server_stopped": true
+  },
+  "rea": {
+    "path": "runs/n06/integration-20261109-rea-clean.json",
+    "sha256": "84755034a2f1119664ff6b317bdc86b1c02d8c7f1791db8d86bb73b0a92e1fc7",
+    "code_commit": "0ac1666dd690771bc4660967e02ae27a3ac1b124",
+    "code_dirty": false,
+    "input_sha256": "d6cd6d971030e34601c2953fd71eceef7ac4fab0c8f0dde285a51a04ab040067",
+    "validation": {
+      "evidence_id": "ev_9b5ec86fab407d69cedfed58f9f2e92a9911c42bf28b7c73b1da7e538a4911e6",
+      "operation": "binary_overview",
+      "subject_sha256": "d6cd6d971030e34601c2953fd71eceef7ac4fab0c8f0dde285a51a04ab040067",
+      "upstream_provider": "ghidra"
+    },
+    "raw_sha256": "95d892b43a6831ff3cdf1a2223b40cdc958b547601bed83af66c9cfef57d7a6d",
+    "operation": "binary_overview",
+    "normalized_result": {
+      "procedure_count": 79,
+      "string_count": 119,
+      "segment_count": 33
+    },
+    "doctor_healthy": true,
+    "n05_complete": false
+  },
+  "capture": {
+    "path": "runs/n06/integration-20261109-capture-clean.json",
+    "sha256": "76f702ce24203604871673669e78a1efdab549b714123dd1e538f89e9af7d8ac",
+    "code_commit": "0ac1666dd690771bc4660967e02ae27a3ac1b124",
+    "code_dirty": false,
+    "packets": 50,
+    "syn": 5,
+    "fin": 10,
+    "sessions": [
+      {
+        "expected": 6,
+        "stdout": "sum=6\n",
+        "exit_code": 0
+      },
+      {
+        "expected": 30,
+        "stdout": "sum=30\n",
+        "exit_code": 0
+      },
+      {
+        "expected": 131070,
+        "stdout": "sum=131070\n",
+        "exit_code": 0
+      },
+      {
+        "expected": 1000,
+        "stdout": "sum=1000\n",
+        "exit_code": 0
+      },
+      {
+        "expected": 35,
+        "stdout": "sum=35\n",
+        "exit_code": 0
+      }
+    ],
+    "pcap": {
+      "path": "runs/n06/integration-20261109-capture-clean.pcap",
+      "sha256": "dd8133e8350cf700c2814603679758b476bc90f962bfea8427a89b360ae2a56d",
+      "bytes": 4310
+    },
+    "server_stopped": true,
+    "tcpdump_stopped": true
+  },
+  "timeout_fix": {
+    "code_commit": "cac9e9b5d0c2354c2acb190aed195e97b5e936da",
+    "code_dirty": false,
+    "change": "Bound inter-chunk waits and socket sends by remaining post-connect case budget",
+    "tests_passed": 21,
+    "test_log": {
+      "path": "runs/n06/integration-20261109-fixed-clean-tests.txt",
+      "sha256": "b51c134967ecbaa511d44e90607cae16261471d033555b1e1f3786fcd7c0b6a7"
+    },
+    "n06_evaluation": {
+      "path": "runs/n06/integration-20261109-fixed-clean-eval.json",
+      "sha256": "aac1c8cdde535e99798b1a5e5f2648604b71f2395c013f9b3caa5e4edf434c2c",
+      "code_commit": "cac9e9b5d0c2354c2acb190aed195e97b5e936da",
+      "code_dirty": false,
+      "summary": {
+        "total": 21,
+        "pass": 21,
+        "fail": 0,
+        "error": 0,
+        "pass_rate": 1,
+        "all_pass": true
+      },
+      "input_sha256": "d6cd6d971030e34601c2953fd71eceef7ac4fab0c8f0dde285a51a04ab040067",
+      "cases_sha256": "375630c1630bfddaabc45c7b03a20a14ec3bc1ee1abe29a0ce57171c04a8fc60",
+      "server_stopped": true
+    }
+  },
+  "provenance_note": "The detached worktree Git directory was mounted read-only at /git; GIT_DIR and GIT_WORK_TREE were supplied to Docker runs. Earlier exploratory records without Git metadata are retained locally and excluded from this evidence."
+}

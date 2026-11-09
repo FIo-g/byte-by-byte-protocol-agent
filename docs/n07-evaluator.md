@@ -7,7 +7,7 @@
 | 파일 | 역할 |
 | --- | --- |
 | `scripts/n07-evaluate.py` | 평가기. Python 3.11+ 표준 라이브러리만 사용 |
-| `scripts/test_n07_evaluate.py` | 모의 테스트 19개. C 서버 대신 같은 동작의 Python 서버를 사용 |
+| `scripts/test_n07_evaluate.py` | 모의 테스트 21개. C 서버 대신 같은 동작의 Python 서버와 시간 예산 대역을 사용 |
 | `practice/n07/cases.json` | 연습 서버의 실제 명세(README)대로 쓴 기대값 10개 — 모두 `pass`가 기대 결과 |
 | `practice/n07/cases-mismatch.json` | 일부러 틀린 명세(음성 대조군) 6개 — 대조군 1개만 `pass`, 나머지는 `fail`/`error`가 기대 결과 |
 
@@ -16,7 +16,7 @@
 - 연결 → 요청 조각을 순서대로 전송(조각 사이 `chunk_delay_ms`, TCP_NODELAY) → `half_close`면 쓰기 방향 종료 → **서버가 연결을 닫을 때까지** 수신한다. 연습 서버는 응답 후 연결을 닫는다.
 - `pass`: 서버가 닫았고 받은 바이트 전체가 기대 바이트와 정확히 같다. 앞부분만 같고 뒤에 더 붙으면 `fail`이다.
 - `fail`: 정상적으로 받았지만 바이트가 다르다. `first_diff_offset`에 처음 다른 위치를 기록한다.
-- `error`: 연결 실패(`connect_timeout` 포함), 연결 후 `timeout_s` 안에 서버가 닫지 않음(`timeout`, 수신마다가 아니라 케이스 전체 시간), 연결 리셋, 응답 4096바이트 초과. 원인은 `error.type`에 남는다.
+- `error`: 연결 실패(`connect_timeout` 포함), 연결 후 `timeout_s` 안에 서버가 닫지 않음(`timeout`, 조각 사이 대기·전송·수신이 같은 시간 예산을 사용), 연결 리셋, 응답 4096바이트 초과. 연결 시도에는 별도의 `timeout_s`가 적용된다. 원인은 `error.type`에 남는다.
 - 케이스 형식: `send`(UTF-8 문자열 조각 목록) 또는 `send_hex`, `expect`(문자열) 또는 `expect_hex`, 선택 `description`/`half_close`(true/false)/`timeout_s`(>0)/`chunk_delay_ms`(>=0). `defaults`에는 `timeout_s`, `chunk_delay_ms`만 둔다. id 중복, 빈 조각, 둘 다/둘 다 없음, 잘못된 타입·범위, 모르는 키(오타)는 서버 연결 전에 거부하고 `stage: cases`로 기록한다.
 - 종료 코드: 모든 케이스 `pass`면 0, 하나라도 `fail`/`error`이거나 실행이 중단되면 1, 명령 인자 오류는 2. 불일치 대조군 실행은 **종료 코드 1이 정상**이며, 이때도 `success: true`(평가 자체는 끝까지 수행)다.
 
