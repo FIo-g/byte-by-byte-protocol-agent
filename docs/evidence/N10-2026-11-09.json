@@ -4,7 +4,7 @@
   "classification": "experiment analysis files (private answer key kept outside this repository)",
   "experiment_score": false,
   "recorded_kst": "2026-11-09",
-  "status": "experiment analysis files prepared and auto-verified; owner check pending",
+  "status": "experiment analysis files prepared and auto-verified; owner ran one session (2026-11-09)",
   "environment": {
     "host": "macOS arm64",
     "container_platform": "linux/amd64 (Docker Desktop emulation)",
@@ -50,5 +50,10 @@
     "string_count": 66,
     "segment_count": 31
   },
-  "owner_check": "pending"
+  "owner_check": {
+    "date_kst": "2026-11-09",
+    "by": "김태형",
+    "scope": "one session with the private original client against the server binary (same SHA-256 as the public file); output matched the private reference spec",
+    "other_results": "capture, REA and private self-checks are AI-run"
+  }
 }
