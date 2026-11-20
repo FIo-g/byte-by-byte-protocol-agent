@@ -1,139 +1,145 @@
-// TCP 클라이언트. data 이벤트 하나를 메시지 하나로 보지 않는다:
-// 헤더를 모아 length를 읽고, 그만큼 더 모아 프레임 하나를 완성한다.
-// 결과: ok / error_frame / timeout / eof_no_response / truncated / protocol_violation / connection_error / connect_failed
+// N08: 명세를 따르는 TCP 클라이언트. 요청 하나를 보내고 응답 프레임 하나를 읽는다.
+// TCP는 메시지 경계가 없으므로 data 이벤트 하나를 응답 하나로 가정하지 않는다.
+// 헤더 크기만큼 모은 뒤 헤더의 length만큼 더 모아서 프레임을 완성한다.
 import net from "node:net";
-import { decodeResponse, encodeRequest, parseResponseHeader, toHex } from "./protocol.mjs";
+import { decodeResponse, encodeRequest, headerSize, parseResponseHeader, toHex } from "./protocol.mjs";
 
-const OUTCOME_TEXT = {
+export const OUTCOME_TEXT = {
   ok: "정상 응답",
   error_frame: "서버가 오류 프레임을 보냄",
   timeout: "시간 초과 (응답이 끝까지 오지 않음)",
-  eof_no_response: "응답 없이 서버가 연결을 닫음",
-  truncated: "응답이 도중에 끊김",
+  eof_no_response: "응답 없이 서버가 연결을 닫음 (EOF)",
+  truncated: "응답이 도중에 끊김 (EOF)",
   protocol_violation: "명세와 다른 응답",
-  connection_error: "연결 오류",
+  connection_error: "연결 오류 (연결 뒤 끊김)",
   connect_failed: "연결 실패",
 };
 
-const round = (ms) => Math.round(ms * 100) / 100;
+// 서버가 이보다 많이 보내면 명세와 다른 서버로 보고 끊는다.
+const MAX_RECEIVED_BYTES = 4096;
 
-export async function sendRequest({
-  spec, numbers, host, port, timeoutMs = 3000, settleMs = 500, minCount = 1, maxBytes = 4096,
-}) {
-  const request = encodeRequest(spec, numbers, { minCount }); // 잘못된 입력은 여기서 InputError(연결 전)
-  const started = process.hrtime.bigint();
-
+/**
+ * 반환값은 항상 객체이며 네트워크 문제로 reject하지 않는다. 입력이 잘못된 경우만 InputError를 던진다.
+ * 결과의 outcome이 무슨 일이 있었는지를 말한다(OUTCOME_TEXT 참고).
+ */
+export async function sendRequest({ spec, numbers, host, port, timeoutMs = 3000, settleMs = 500, minCount }) {
+  const request = encodeRequest(spec, numbers, { minCount });
   return new Promise((resolve) => {
-    const chunks = [];
-    let total = 0;
+    const started = process.hrtime.bigint();
+    const socket = net.createConnection({ host, port });
+    socket.setNoDelay(true);
+
+    let received = Buffer.alloc(0);
     let connected = false;
-    let closedByServer = false;
-    let errorCode = null;
-    let frameLength = null;
-    let frameDone = false;
+    let serverClosed = false;
+    let frame = null; // 헤더를 해석한 결과(parseResponseHeader)
+    let complete = null; // 프레임을 다 모은 뒤의 해석 결과
     let finished = false;
     let settleTimer = null;
     const notes = [];
 
-    const socket = net.createConnection({ host, port });
-    const mainTimer = setTimeout(() => {
-      if (!connected) finish("connect_failed", { error_code: "ETIMEDOUT", error_message: `${timeoutMs} ms 안에 연결하지 못했습니다.` });
-      else finish("timeout", { error_message: `${timeoutMs} ms 안에 응답 프레임이 완성되지 않았습니다.` });
-    }, timeoutMs);
+    const elapsedMs = () => Math.round(Number(process.hrtime.bigint() - started) / 1e4) / 100;
 
-    function received() { return Buffer.concat(chunks); }
-
-    function finish(outcome, extra = {}) {
+    const finish = (outcome, extra = {}) => {
       if (finished) return;
       finished = true;
-      clearTimeout(mainTimer);
+      clearTimeout(deadline);
       clearTimeout(settleTimer);
       socket.destroy();
-      const all = received();
-      let frameHex = null;
-      let trailingHex = null;
-      let decoded = null;
-      let violation = extra.violation;
-      if (frameDone) {
-        const frame = all.subarray(0, frameLength);
-        frameHex = toHex(frame);
-        trailingHex = toHex(all.subarray(frameLength));
-        if (trailingHex) notes.push(`프레임 뒤에 ${all.length - frameLength}바이트가 더 왔습니다: ${trailingHex.slice(0, 64)}${trailingHex.length > 64 ? "…" : ""}`);
-        decoded = decodeResponse(spec, frame);
-        if (!decoded.ok) { outcome = "protocol_violation"; violation = decoded.reason; decoded = null; }
-        else if (decoded.role === "error") outcome = "error_frame";
+      const response = { bytes_received: received.length, hex: toHex(received) };
+      if (complete) {
+        response.frame_hex = complete.decoded.hex;
+        response.decoded = complete.decoded;
+        const trailing = received.subarray(complete.total);
+        if (trailing.length) {
+          response.trailing_hex = toHex(trailing);
+          notes.push(`응답 프레임 뒤에 ${trailing.length}바이트가 더 왔습니다.`);
+        }
       }
-      if (extra.note) notes.push(extra.note);
       resolve({
-        ok: outcome === "ok",
         outcome,
         outcome_text: OUTCOME_TEXT[outcome],
-        ...(violation ? { violation } : {}),
-        ...(extra.error_message ? { error_message: extra.error_message } : {}),
-        request: { message: request.message, hex: request.hex, fields: request.fields, bytes: request.bytes.length },
-        response: { hex: toHex(all), frame_hex: frameHex, trailing_hex: trailingHex, bytes_received: total, decoded },
+        ok: outcome === "ok",
+        request: { message: request.message, hex: request.hex, fields: request.fields },
+        response,
         connection: {
           host, port, connected,
-          closed_by_server: connected ? closedByServer : null,
-          error_code: extra.error_code ?? errorCode,
+          closed_by_server: connected ? serverClosed : null,
+          ...(extra.error_code ? { error_code: extra.error_code } : {}),
         },
-        elapsed_ms: round(Number(process.hrtime.bigint() - started) / 1e6),
+        ...(extra.violation ? { violation: extra.violation } : {}),
+        ...(extra.error_message ? { error_message: extra.error_message } : {}),
+        elapsed_ms: elapsedMs(),
         notes,
       });
-    }
+    };
 
-    function frameFinished(extra) { finish("ok", extra); }
+    const finishComplete = () => {
+      const isError = complete.message.role === "error";
+      finish(isError ? "error_frame" : "ok");
+    };
+
+    const consume = () => {
+      if (received.length > MAX_RECEIVED_BYTES) {
+        finish("protocol_violation", { violation: `서버가 ${MAX_RECEIVED_BYTES}바이트가 넘게 보냈습니다.` });
+        return;
+      }
+      const size = headerSize(spec);
+      if (!frame && received.length >= size) {
+        const parsed = parseResponseHeader(spec, received.subarray(0, size));
+        if (!parsed.ok) {
+          finish("protocol_violation", { violation: parsed.reason });
+          return;
+        }
+        frame = parsed;
+      }
+      if (frame && !complete && received.length >= frame.totalLength) {
+        const decoded = decodeResponse(spec, received.subarray(0, frame.totalLength));
+        if (!decoded.ok) {
+          finish("protocol_violation", { violation: decoded.reason });
+          return;
+        }
+        complete = { decoded, total: frame.totalLength, message: frame.message };
+        // 프레임은 다 왔다. 서버가 연결을 닫는지, 뒤에 바이트가 더 오는지 잠깐만 지켜본다.
+        if (serverClosed) finishComplete();
+        else settleTimer = setTimeout(finishComplete, settleMs);
+      }
+    };
+
+    const deadline = setTimeout(() => finish("timeout"), timeoutMs);
 
     socket.on("connect", () => {
       connected = true;
       socket.write(request.bytes);
     });
-
     socket.on("data", (chunk) => {
       if (finished) return;
-      chunks.push(chunk);
-      total += chunk.length;
-      if (!frameDone) {
-        const all = received();
-        if (frameLength === null && all.length >= spec.header.size) {
-          const head = parseResponseHeader(spec, all.subarray(0, spec.header.size));
-          if (!head.ok) return finish("protocol_violation", { violation: head.reason });
-          frameLength = head.totalLength;
-        }
-        if (frameLength !== null && all.length >= frameLength) {
-          frameDone = true;
-          clearTimeout(mainTimer);
-          // 프레임은 완성됐다. 서버가 연결을 닫는지 잠깐 지켜본다.
-          settleTimer = setTimeout(() => frameFinished({ note: `서버가 ${settleMs} ms 안에 연결을 닫지 않았습니다.` }), settleMs);
-        }
-      }
-      if (total > maxBytes) {
-        if (frameDone) frameFinished({ note: `받은 바이트가 한도(${maxBytes})를 넘어 연결을 끊었습니다.` });
-        else finish("protocol_violation", { violation: `프레임이 완성되기 전에 한도(${maxBytes}바이트)를 넘었습니다.` });
-      }
+      received = Buffer.concat([received, chunk]);
+      consume();
     });
-
     socket.on("end", () => {
-      closedByServer = true;
-      if (frameDone) return frameFinished();
-      if (total === 0) return finish("eof_no_response");
-      return finish("truncated", { error_message: `프레임(${frameLength ?? "?"}바이트) 중 ${total}바이트만 받고 연결이 닫혔습니다.` });
+      if (finished) return;
+      serverClosed = true;
+      if (complete) finishComplete();
+      else if (received.length === 0) finish("eof_no_response");
+      else finish("truncated");
     });
-
     socket.on("error", (error) => {
-      errorCode = error.code ?? null;
-      if (!connected) return finish("connect_failed", { error_code: errorCode, error_message: error.message });
-      closedByServer = true;
-      if (frameDone) return frameFinished({ note: `응답을 다 받은 뒤 연결 오류(${errorCode})가 났습니다. 결과에는 영향이 없습니다.` });
-      return finish("connection_error", { error_message: error.message });
+      if (finished) return;
+      if (complete) {
+        // 응답은 이미 다 받았다. 그 뒤의 리셋은 기록만 한다.
+        notes.push(`응답을 다 받은 뒤 연결 오류가 있었습니다 (${error.code ?? error.message}).`);
+        finishComplete();
+        return;
+      }
+      finish(connected ? "connection_error" : "connect_failed", { error_code: error.code, error_message: error.message });
     });
-
     socket.on("close", () => {
       if (finished) return;
-      closedByServer = true;
-      if (frameDone) return frameFinished();
-      if (total === 0) return finish("eof_no_response");
-      return finish("truncated");
+      serverClosed = true;
+      if (complete) finishComplete();
+      else if (received.length === 0) finish("eof_no_response");
+      else finish("truncated");
     });
   });
 }

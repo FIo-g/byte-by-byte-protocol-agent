@@ -1,163 +1,221 @@
-// HTTP 라우팅, 입력 검증, 로컬 전용 보안 규칙.
-// 접속 대상(target)은 서버 설정으로 고정하고 요청으로 바꿀 수 없다.
+// N08: 웹 화면과 API. Node 내장 모듈만 쓴다.
+// 접속 대상(host:port)은 서버 시작 때 정해진 값이고 요청으로 바꿀 수 없다.
+import { createServer } from "node:http";
 import { existsSync, readFileSync } from "node:fs";
-import http from "node:http";
 import { join } from "node:path";
 import { sendRequest } from "./client.mjs";
-import { DEFAULT_EVALUATOR, runEvaluation } from "./evaluate.mjs";
-import { InputError, encodeRequest } from "./protocol.mjs";
-import { QueueFullError, createQueue } from "./queue.mjs";
+import { DEFAULT_CASES, DEFAULT_EVALUATOR, runEvaluation } from "./evaluate.mjs";
+import { InputError } from "./protocol.mjs";
+import { BusyError, createSerialQueue } from "./queue.mjs";
 
-const STATIC = {
+const MAX_BODY_BYTES = 4096;
+const WEB_MIN_COUNT = 1; // 웹 입력은 숫자 1~32개 (명세는 0개도 허용하지만 참고 클라이언트처럼 1개 이상)
+
+const STATIC_FILES = {
   "/": ["index.html", "text/html; charset=utf-8"],
   "/index.html": ["index.html", "text/html; charset=utf-8"],
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
   "/style.css": ["style.css", "text/css; charset=utf-8"],
 };
+
 const SECURITY_HEADERS = {
-  "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+  "Cache-Control": "no-store",
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "no-referrer",
-  "Cache-Control": "no-store",
+  "Content-Security-Policy":
+    "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; " +
+    "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
 };
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
-const MAX_BODY = 4096;
+
+const LOOPBACK_NAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+function hostnameOf(hostHeader) {
+  if (!hostHeader) return null;
+  return hostHeader.startsWith("[") ? hostHeader.slice(0, hostHeader.indexOf("]") + 1) : hostHeader.split(":")[0];
+}
+
+function sendJson(res, status, body) {
+  const text = JSON.stringify(body);
+  res.writeHead(status, { ...SECURITY_HEADERS, "Content-Type": "application/json; charset=utf-8", "Content-Length": Buffer.byteLength(text) });
+  res.end(text);
+}
 
 class HttpError extends Error {
-  constructor(status, error, message) { super(message); this.status = status; this.error = error; }
+  constructor(status, code, message) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
 }
 
-function hostName(hostHeader) {
-  if (typeof hostHeader !== "string" || !hostHeader) return null;
-  if (hostHeader.startsWith("[")) return hostHeader.slice(0, hostHeader.indexOf("]") + 1).toLowerCase();
-  return hostHeader.split(":")[0].toLowerCase();
+async function readJsonBody(req) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > MAX_BODY_BYTES) {
+      throw new HttpError(413, "body_too_large", `요청 본문은 ${MAX_BODY_BYTES}바이트 이하여야 합니다.`);
+    }
+    chunks.push(chunk);
+  }
+  const text = Buffer.concat(chunks).toString("utf8");
+  if (text.trim() === "") return {};
+  try {
+    const value = JSON.parse(text);
+    if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("not an object");
+    return value;
+  } catch {
+    throw new HttpError(400, "invalid_json", "요청 본문이 JSON 객체가 아닙니다.");
+  }
 }
 
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    const declared = Number(req.headers["content-length"]);
-    let size = 0;
-    const chunks = [];
-    let tooLarge = Number.isFinite(declared) && declared > MAX_BODY;
-    req.on("data", (chunk) => {
-      size += chunk.length;
-      if (size > MAX_BODY) tooLarge = true;
-      else chunks.push(chunk);
-    });
-    req.on("end", () => (tooLarge ? reject(new HttpError(413, "body_too_large", `본문은 ${MAX_BODY}바이트까지입니다.`)) : resolve(Buffer.concat(chunks).toString("utf8"))));
-    req.on("error", reject);
-  });
+function rejectUnknownKeys(body, allowed) {
+  const extra = Object.keys(body).filter((key) => !allowed.includes(key));
+  if (extra.length) {
+    throw new HttpError(400, "unknown_field", `허용되지 않은 필드: ${extra.join(", ")}. 접속 대상은 서버에 고정돼 있어 요청으로 바꿀 수 없습니다.`);
+  }
 }
 
-async function readJsonObject(req, allowed) {
-  const type = String(req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
-  if (type !== "application/json") {
-    req.resume();
-    throw new HttpError(415, "unsupported_media_type", "Content-Type: application/json만 받습니다.");
-  }
-  const text = await readBody(req);
-  let body;
-  try { body = text.trim() === "" ? {} : JSON.parse(text); } catch {
-    throw new HttpError(400, "invalid_json", "본문이 JSON이 아닙니다.");
-  }
-  if (!body || typeof body !== "object" || Array.isArray(body)) throw new HttpError(400, "invalid_body", "본문은 JSON 객체여야 합니다.");
-  const unknown = Object.keys(body).filter((key) => !allowed.includes(key));
-  if (unknown.length) throw new HttpError(400, "unknown_field", `허용하지 않는 필드: ${unknown.join(", ")}`);
-  return body;
-}
+/**
+ * options.root          저장소 루트 (평가기 스크립트와 결과 폴더의 기준)
+ * options.spec          읽어 둔 명세 객체
+ * options.target        { host, port } 고정 접속 대상
+ * options.practiceServer snapshot()을 가진 객체 (실행 상태)
+ * options.publicDir     정적 파일 폴더
+ * options.evaluator     테스트에서만 바꾸는 평가기 명령 배열 (요청으로는 바뀌지 않음)
+ */
+export function createApp({ root, spec, target, practiceServer, publicDir, evaluator = DEFAULT_EVALUATOR, evaluationTimeoutMs, sendTimeoutMs = 3000, log = () => {} }) {
+  const queue = createSerialQueue({ maxPending: 8 });
+  const state = { latestEvaluation: null };
 
-export function createApp({
-  root, spec, practiceServer, target, publicDir, log = () => {},
-  evaluator = DEFAULT_EVALUATOR, evaluationTimeoutMs = 60000, sendTimeoutMs = 3000, maxWaiting = 8,
-}) {
-  const queue = createQueue({ maxWaiting });
-  let latestEvaluation = null;
-  const serverInfo = () => ({ ...practiceServer.snapshot(), host: target.host, port: target.port });
+  const specSummary = {
+    name: spec.name, format: spec.format, classification: spec.classification,
+    experiment_score: spec.experiment_score, source: spec.source,
+  };
 
-  function send(res, status, body, headers = {}) {
-    const isBuffer = Buffer.isBuffer(body);
-    const payload = isBuffer ? body : JSON.stringify(body);
-    res.writeHead(status, {
-      ...SECURITY_HEADERS,
-      "Content-Type": isBuffer ? headers["Content-Type"] : "application/json; charset=utf-8",
-      "Content-Length": Buffer.byteLength(payload),
-      ...headers,
-    });
-    res.end(payload);
-  }
-
-  function requireRunning() {
-    const server = practiceServer.snapshot();
-    if (server.state !== "running") throw new HttpError(503, "server_unavailable", server.message ?? `연습 서버 상태: ${server.state}`);
-  }
-
-  async function inQueue(task) {
-    try { return await queue.run(task); } catch (error) {
-      if (error instanceof QueueFullError) throw new HttpError(429, "queue_full", error.message);
-      throw error;
+  function checkHost(req) {
+    const hostname = hostnameOf(req.headers.host);
+    if (!hostname || !LOOPBACK_NAMES.has(hostname)) {
+      throw new HttpError(403, "forbidden_host", "이 화면은 localhost / 127.0.0.1로만 열 수 있습니다.");
     }
   }
 
-  async function handle(req, res) {
-    const url = new URL(req.url, "http://local");
+  function checkPost(req) {
+    const origin = req.headers.origin;
+    if (origin && origin !== `http://${req.headers.host}`) {
+      throw new HttpError(403, "forbidden_origin", "같은 출처의 요청만 받습니다.");
+    }
+    const type = (req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
+    if (type !== "application/json") {
+      throw new HttpError(415, "unsupported_media_type", "Content-Type은 application/json이어야 합니다.");
+    }
+  }
+
+  function requireServer() {
+    const snap = practiceServer.snapshot();
+    if (snap.state !== "running") {
+      throw new HttpError(503, "server_unavailable", snap.message || `연습 서버가 실행 중이 아닙니다 (state: ${snap.state}).`);
+    }
+    return snap;
+  }
+
+  const serverInfo = (snap) => ({ host: target.host, port: target.port, pid: snap.pid, sha256: snap.sha256, binary: snap.binary });
+
+  async function route(req, res) {
+    checkHost(req);
+    const url = new URL(req.url, "http://localhost");
     const path = url.pathname;
-    const host = hostName(req.headers.host);
-    if (!LOCAL_HOSTS.has(host)) throw new HttpError(403, "forbidden_host", "로컬 주소(localhost/127.0.0.1)로만 접속할 수 있습니다.");
-    if (req.method === "POST" && req.headers.origin !== undefined && req.headers.origin !== `http://${req.headers.host}`) {
-      throw new HttpError(403, "forbidden_origin", "다른 출처의 요청은 받지 않습니다.");
-    }
 
-    if (req.method === "GET") {
+    if (req.method === "GET" || req.method === "HEAD") {
+      if (STATIC_FILES[path]) {
+        const [file, type] = STATIC_FILES[path];
+        const body = readFileSync(join(publicDir, file));
+        res.writeHead(200, { ...SECURITY_HEADERS, "Content-Type": type, "Content-Length": body.length });
+        res.end(req.method === "HEAD" ? undefined : body);
+        return;
+      }
+      if (path === "/api/spec") return sendJson(res, 200, spec);
       if (path === "/api/health") {
-        return send(res, 200, {
-          ok: true,
-          server: serverInfo(),
-          spec: { name: spec.name, format: spec.format, classification: spec.classification, experiment_score: spec.experiment_score },
-          queue: { running: queue.running, waiting: queue.waiting },
-          evaluator: { command: evaluator, script_exists: evaluator.length > 1 ? existsSync(join(root, evaluator[1])) : null },
+        const snap = practiceServer.snapshot();
+        return sendJson(res, 200, {
+          ok: snap.state === "running",
+          now: new Date().toISOString(),
+          node: process.version,
+          platform: `${process.platform}/${process.arch}`,
+          spec: specSummary,
+          server: { ...snap, host: target.host, port: target.port },
+          queue: { pending: queue.pending },
+          evaluator: {
+            script_present: existsSync(join(root, evaluator[evaluator.length - 1])),
+            cases_present: existsSync(join(root, DEFAULT_CASES)),
+            cases_file: DEFAULT_CASES,
+          },
         });
       }
-      if (path === "/api/spec") return send(res, 200, spec);
-      if (path === "/api/evaluate/latest") return send(res, 200, { evaluation: latestEvaluation });
-      const file = STATIC[path];
-      if (!file) throw new HttpError(404, "not_found", "없는 경로입니다.");
-      return send(res, 200, readFileSync(join(publicDir, file[0])), { "Content-Type": file[1] });
+      if (path === "/api/evaluate/latest") return sendJson(res, 200, { evaluation: state.latestEvaluation });
+      throw new HttpError(404, "not_found", "없는 경로입니다.");
     }
 
-    if (req.method === "POST" && path === "/api/send") {
-      const body = await readJsonObject(req, ["numbers"]);
-      try {
-        // 서버에서 입력을 다시 검증한다(정수, 0~65535, 1~32개). 잘못되면 연결하지 않는다.
-        encodeRequest(spec, body.numbers, { minCount: 1 });
-      } catch (error) {
-        if (error instanceof InputError) throw new HttpError(400, "invalid_input", error.message);
-        throw error;
+    if (req.method === "POST") {
+      checkPost(req);
+      const body = await readJsonBody(req);
+
+      if (path === "/api/send") {
+        rejectUnknownKeys(body, ["numbers"]);
+        const snap = requireServer();
+        let result;
+        try {
+          result = await queue.run(() => sendRequest({
+            spec, numbers: body.numbers, host: target.host, port: target.port, timeoutMs: sendTimeoutMs, minCount: WEB_MIN_COUNT,
+          }));
+        } catch (error) {
+          if (error instanceof InputError) throw new HttpError(400, "invalid_input", error.message);
+          if (error instanceof BusyError) throw new HttpError(429, "busy", error.message);
+          throw error;
+        }
+        return sendJson(res, 200, { result, server: serverInfo(snap) });
       }
-      requireRunning();
-      const result = await inQueue(() => sendRequest({ spec, numbers: body.numbers, host: target.host, port: target.port, timeoutMs: sendTimeoutMs, minCount: 1 }));
-      log({ level: "info", message: "send", outcome: result.outcome, request_hex: result.request.hex, response_hex: result.response.hex });
-      return send(res, 200, { result, server: serverInfo() });
+
+      if (path === "/api/evaluate") {
+        rejectUnknownKeys(body, []);
+        const snap = requireServer();
+        let evaluation;
+        try {
+          evaluation = await queue.run(() => runEvaluation({
+            root, host: target.host, port: target.port, command: evaluator, timeoutMs: evaluationTimeoutMs,
+          }));
+        } catch (error) {
+          if (error instanceof BusyError) throw new HttpError(429, "busy", error.message);
+          throw error;
+        }
+        evaluation = { ...evaluation, server: serverInfo(snap), finished_at: new Date().toISOString() };
+        state.latestEvaluation = evaluation;
+        return sendJson(res, 200, { evaluation });
+      }
+      throw new HttpError(404, "not_found", "없는 경로입니다.");
     }
 
-    if (req.method === "POST" && path === "/api/evaluate") {
-      await readJsonObject(req, []);
-      requireRunning();
-      const evaluation = await inQueue(() => runEvaluation({ root, target, server: serverInfo(), evaluator, timeoutMs: evaluationTimeoutMs }));
-      latestEvaluation = evaluation;
-      log({ level: "info", message: "evaluate", status: evaluation.status, out_file: evaluation.out_file });
-      return send(res, 200, { evaluation });
-    }
-
-    if (req.method === "POST") throw new HttpError(404, "not_found", "없는 경로입니다.");
-    throw new HttpError(405, "method_not_allowed", `${req.method}는 허용하지 않습니다.`);
+    throw new HttpError(405, "method_not_allowed", "GET, HEAD, POST만 지원합니다.");
   }
 
-  return http.createServer((req, res) => {
-    handle(req, res).catch((error) => {
-      if (res.headersSent) return res.destroy();
-      if (error instanceof HttpError) return send(res, error.status, { error: error.error, message: error.message });
-      log({ level: "error", message: "unhandled", error: String(error?.stack ?? error) });
-      return send(res, 500, { error: "internal_error", message: "백엔드 오류" });
-    });
+  const server = createServer(async (req, res) => {
+    const started = Date.now();
+    try {
+      await route(req, res);
+    } catch (error) {
+      if (error instanceof HttpError) {
+        if (!res.headersSent) sendJson(res, error.status, { error: error.code, message: error.message });
+        else res.end();
+      } else {
+        log({ level: "error", message: error.stack ?? String(error) });
+        if (!res.headersSent) sendJson(res, 500, { error: "internal_error", message: "서버 내부 오류입니다." });
+        else res.end();
+      }
+    } finally {
+      log({ level: "info", method: req.method, path: req.url?.split("?")[0], status: res.statusCode, ms: Date.now() - started });
+    }
   });
+  server.requestTimeout = 15_000;
+  server.headersTimeout = 10_000;
+  return server;
 }

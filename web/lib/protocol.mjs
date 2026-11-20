@@ -1,185 +1,202 @@
-// 명세 JSON(n08-draft-1)을 읽어 요청 프레임을 만들고 응답 프레임을 해석한다.
-// 명세는 데이터로만 쓴다(코드로 실행하지 않는다). Node 내장 모듈만 사용.
-// 2026-11-20 재작성: 원본 web/lib는 .gitignore(lib/) 때문에 커밋되지 않아 유실됐고,
-// 커밋된 web/test/*.test.mjs와 docs/n08-web-client.md를 기준으로 다시 작성했다.
+// N08: 명세 JSON(web/spec/*.json)을 읽어 요청 프레임을 만들고 응답 프레임을 해석한다.
+// 소켓을 모른다. 바이트와 명세만 다루므로 send/recv 경계와 무관하게 검증할 수 있다.
 import { readFileSync } from "node:fs";
 
-export class SpecError extends Error {
-  constructor(message) { super(message); this.name = "SpecError"; }
-}
+const KIND_SIZE = { u8: 1, u16: 2, u32: 4 };
+
+export class SpecError extends Error {}
+
 export class InputError extends Error {
-  constructor(message) { super(message); this.name = "InputError"; }
+  constructor(message) {
+    super(message);
+    this.name = "InputError";
+  }
 }
-
-const INT_SIZE = { u8: 1, u16: 2, u32: 4 };
-const HEX = /^(?:[0-9a-f]{2})+$/i;
-
-export const toHex = (bytes) => Buffer.from(bytes).toString("hex");
 
 export function loadSpec(path) {
-  let parsed;
-  try {
-    parsed = JSON.parse(readFileSync(path, "utf8"));
-  } catch (error) {
-    throw new SpecError(`명세 JSON을 읽지 못했습니다: ${path} (${error.message})`);
-  }
-  return validateSpec(parsed);
+  const spec = JSON.parse(readFileSync(path, "utf8"));
+  validateSpec(spec);
+  return spec;
 }
 
-/** 이 클라이언트가 실행할 수 있는 명세인지 검사한다. 모르는 부분은 추측하지 않고 거절한다. */
+function need(condition, message) {
+  if (!condition) throw new SpecError(`명세 오류: ${message}`);
+}
+
+const isHex = (text, bytes) => typeof text === "string" && text.length === bytes * 2 && /^[0-9a-f]+$/.test(text);
+
 export function validateSpec(spec) {
-  if (!spec || typeof spec !== "object" || Array.isArray(spec)) throw new SpecError("명세가 객체가 아닙니다.");
-  if (spec.transport?.protocol !== "tcp") throw new SpecError("transport.protocol은 tcp여야 합니다.");
-  if (spec.transport?.byte_order !== "big") throw new SpecError("transport.byte_order는 big만 지원합니다.");
-
+  need(spec && typeof spec === "object", "객체가 아님");
+  need(spec.transport?.byte_order === "big", "transport.byte_order는 big만 지원한다");
   const header = spec.header;
-  if (!header || !Number.isInteger(header.size) || header.size < 1 || !Array.isArray(header.fields)) {
-    throw new SpecError("header.size와 header.fields가 필요합니다.");
-  }
-  let end = 0;
-  const kinds = { type: 0, length: 0 };
+  need(Number.isInteger(header?.size) && header.size > 0, "header.size");
+  need(Array.isArray(header.fields) && header.fields.length > 0, "header.fields");
+  let offset = 0;
+  let typeFields = 0;
+  let lengthFields = 0;
   for (const field of header.fields) {
-    if (typeof field.name !== "string" || !field.name) throw new SpecError("헤더 필드에 name이 없습니다.");
-    if (field.offset !== end) throw new SpecError(`헤더 필드 ${field.name}의 offset ${field.offset}이 앞 필드와 이어지지 않습니다(기대 ${end}).`);
-    if (!Number.isInteger(field.size) || field.size < 1) throw new SpecError(`헤더 필드 ${field.name}의 size가 잘못됐습니다.`);
-    end += field.size;
-    if (field.kind === "const") {
-      if (typeof field.value !== "string" || !HEX.test(field.value) || field.value.length !== field.size * 2) {
-        throw new SpecError(`헤더 필드 ${field.name}의 상수 값이 size와 맞는 hex가 아닙니다.`);
-      }
-    } else if (field.kind === "type" || field.kind === "length") {
-      kinds[field.kind] += 1;
-      if (field.size > 4) throw new SpecError(`헤더 필드 ${field.name}는 4바이트 이하만 지원합니다.`);
-    } else {
-      throw new SpecError(`헤더 필드 ${field.name}의 kind ${field.kind}은 지원하지 않습니다.`);
-    }
+    need(field.offset === offset, `header 필드 ${field.name}의 offset이 이어지지 않는다`);
+    need(Number.isInteger(field.size) && field.size > 0, `header 필드 ${field.name}의 size`);
+    if (field.kind === "const") need(isHex(field.value, field.size), `${field.name}의 const 값`);
+    else if (field.kind === "type") typeFields += 1;
+    else if (field.kind === "length") lengthFields += 1;
+    else need(false, `header 필드 ${field.name}의 kind ${field.kind}`);
+    offset += field.size;
   }
-  if (end !== header.size) throw new SpecError(`헤더 필드 합계 ${end}바이트가 header.size ${header.size}와 다릅니다.`);
-  if (kinds.type !== 1 || kinds.length !== 1) throw new SpecError("헤더에는 type 필드와 length 필드가 하나씩 있어야 합니다.");
-
+  need(offset === header.size, "header 필드 크기의 합이 header.size와 다르다");
+  need(typeFields === 1 && lengthFields === 1, "type 필드와 length 필드는 각각 하나여야 한다");
   const typeSize = header.fields.find((f) => f.kind === "type").size;
-  const { request, response } = spec.messages ?? {};
-  if (!Array.isArray(request) || request.length === 0) throw new SpecError("messages.request가 필요합니다.");
-  if (!Array.isArray(response) || response.length === 0) throw new SpecError("messages.response가 필요합니다.");
-  for (const message of [...request, ...response]) {
-    if (typeof message.type !== "string" || !HEX.test(message.type) || message.type.length !== typeSize * 2) {
-      throw new SpecError(`메시지 ${message.name}의 type이 헤더 type 크기와 맞는 hex가 아닙니다.`);
-    }
-  }
-  for (const message of request) {
+
+  need(Array.isArray(spec.messages?.request) && spec.messages.request.length > 0, "messages.request");
+  for (const message of spec.messages.request) {
+    need(isHex(message.type, typeSize), `요청 type ${message.type}`);
     const payload = message.payload;
-    if (payload?.layout !== "array" || !INT_SIZE[payload.element]) throw new SpecError(`요청 ${message.name}: array(u8/u16/u32) payload만 지원합니다.`);
+    need(payload?.layout === "array" && payload.element in KIND_SIZE, `요청 ${message.name}의 payload`);
+    need(Number.isInteger(payload.min_count) && Number.isInteger(payload.max_count) &&
+      payload.min_count >= 0 && payload.min_count <= payload.max_count, `요청 ${message.name}의 개수 범위`);
   }
-  for (const message of response) {
-    const payload = message.payload;
-    if (payload?.layout !== "fields" || !Array.isArray(payload.fields) || payload.fields.length === 0) {
-      throw new SpecError(`응답 ${message.name}: fields payload만 지원합니다.`);
-    }
-    for (const field of payload.fields) {
-      if (!INT_SIZE[field.kind]) throw new SpecError(`응답 ${message.name}의 필드 ${field.name}: kind ${field.kind}은 지원하지 않습니다.`);
-    }
+  need(Array.isArray(spec.messages?.response) && spec.messages.response.length > 0, "messages.response");
+  for (const message of spec.messages.response) {
+    need(isHex(message.type, typeSize), `응답 type ${message.type}`);
+    need(message.payload?.layout === "fields" && Array.isArray(message.payload.fields), `응답 ${message.name}의 payload`);
+    for (const field of message.payload.fields) need(field.kind in KIND_SIZE, `응답 필드 ${field.name}의 kind`);
   }
   return spec;
 }
 
-function uint(value, size) {
-  const out = Buffer.alloc(size);
-  out.writeUIntBE(value, 0, size);
-  return out;
+export const toHex = (buffer) => Buffer.from(buffer).toString("hex");
+
+function readUint(buffer, offset, size) {
+  let value = 0;
+  for (let i = 0; i < size; i += 1) value = value * 256 + buffer[offset + i];
+  return value;
 }
 
-/** numbers로 요청 프레임을 만든다. 잘못된 입력은 InputError(연결하기 전에 거절). */
-export function encodeRequest(spec, numbers, { minCount = 0, message } = {}) {
-  const request = message ? spec.messages.request.find((m) => m.name === message) : spec.messages.request[0];
-  if (!request) throw new InputError(`명세에 없는 요청 ${message}`);
-  const payloadSpec = request.payload;
-  const size = INT_SIZE[payloadSpec.element];
-  const max = 2 ** (8 * size) - 1;
+function writeUint(buffer, offset, size, value) {
+  let rest = value;
+  for (let i = size - 1; i >= 0; i -= 1) {
+    buffer[offset + i] = rest % 256;
+    rest = Math.floor(rest / 256);
+  }
+}
 
-  if (!Array.isArray(numbers)) throw new InputError("numbers는 배열이어야 합니다.");
-  const low = Math.max(minCount, payloadSpec.min_count ?? 0);
-  const high = payloadSpec.max_count ?? Infinity;
-  if (numbers.length < low || numbers.length > high) {
-    throw new InputError(`숫자는 ${low}~${high}개여야 합니다(입력 ${numbers.length}개).`);
+const headerFields = (spec) => spec.header.fields;
+const typeField = (spec) => headerFields(spec).find((f) => f.kind === "type");
+const lengthField = (spec) => headerFields(spec).find((f) => f.kind === "length");
+
+export const headerSize = (spec) => spec.header.size;
+
+/**
+ * 요청 프레임을 만든다.
+ * options.minCount: 웹 입력 규칙이 명세보다 좁을 때(웹은 1개 이상) 쓴다.
+ */
+export function encodeRequest(spec, numbers, options = {}) {
+  const message = spec.messages.request[0];
+  const { element, min_count: specMin, max_count: maxCount } = message.payload;
+  const minCount = Math.max(specMin, options.minCount ?? specMin);
+  const elementSize = KIND_SIZE[element];
+  const maxValue = 2 ** (8 * elementSize) - 1;
+
+  if (!Array.isArray(numbers)) throw new InputError("numbers는 숫자 배열이어야 합니다.");
+  if (numbers.length < minCount || numbers.length > maxCount) {
+    throw new InputError(`숫자는 ${minCount}~${maxCount}개여야 합니다. (받은 개수: ${numbers.length})`);
   }
   numbers.forEach((value, index) => {
-    if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > max) {
-      throw new InputError(`${index}번째 값 ${JSON.stringify(value)}은(는) 0~${max} 정수가 아닙니다.`);
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > maxValue) {
+      throw new InputError(`${index + 1}번째 값은 0~${maxValue} 범위의 정수여야 합니다.`);
     }
   });
 
-  const payload = Buffer.concat(numbers.map((value) => uint(value, size)));
-  const fields = spec.header.fields.map((field) => {
-    if (field.kind === "const") return { name: field.name, hex: field.value.toLowerCase(), value: field.value.toLowerCase() };
-    if (field.kind === "type") return { name: field.name, hex: request.type.toLowerCase(), value: request.type.toLowerCase(), meaning: request.name };
-    if (payload.length > 2 ** (8 * field.size) - 1) throw new InputError("payload가 length 필드 범위를 넘습니다.");
-    return { name: field.name, hex: toHex(uint(payload.length, field.size)), value: payload.length };
-  });
-  numbers.forEach((value, index) => fields.push({ name: `value[${index}]`, hex: toHex(uint(value, size)), value }));
-  const bytes = Buffer.from(fields.map((f) => f.hex).join(""), "hex");
-  return { message: request.name, bytes, hex: toHex(bytes), fields };
-}
-
-const payloadSize = (message) => message.payload.fields.reduce((sum, field) => sum + INT_SIZE[field.kind], 0);
-
-/** 헤더만 보고 이 응답이 명세에 맞는지, 프레임 전체 길이가 얼마인지 판단한다. */
-export function parseResponseHeader(spec, bytes) {
-  const header = spec.header;
-  if (bytes.length < header.size) throw new RangeError(`헤더 ${header.size}바이트를 다 모으기 전에는 해석하지 않습니다(${bytes.length}바이트).`);
-  let typeHex = null;
-  let length = null;
-  for (const field of header.fields) {
-    const slice = bytes.subarray(field.offset, field.offset + field.size);
-    if (field.kind === "const" && toHex(slice) !== field.value.toLowerCase()) {
-      return { ok: false, reason: `${field.name}이(가) ${toHex(slice)}입니다(명세 ${field.value.toLowerCase()}).` };
+  const payloadLength = numbers.length * elementSize;
+  const bytes = Buffer.alloc(headerSize(spec) + payloadLength);
+  const fields = [];
+  for (const field of headerFields(spec)) {
+    if (field.kind === "const") {
+      Buffer.from(field.value, "hex").copy(bytes, field.offset);
+      fields.push({ name: field.name, offset: field.offset, size: field.size, hex: field.value, value: field.value });
+    } else if (field.kind === "type") {
+      Buffer.from(message.type, "hex").copy(bytes, field.offset);
+      fields.push({ name: field.name, offset: field.offset, size: field.size, hex: message.type, value: message.name });
+    } else {
+      writeUint(bytes, field.offset, field.size, payloadLength);
+      fields.push({
+        name: field.name, offset: field.offset, size: field.size,
+        hex: toHex(bytes.subarray(field.offset, field.offset + field.size)), value: payloadLength,
+      });
     }
-    if (field.kind === "type") typeHex = toHex(slice);
-    if (field.kind === "length") length = slice.readUIntBE(0, field.size);
   }
-  const message = spec.messages.response.find((m) => m.type.toLowerCase() === typeHex);
-  if (!message) return { ok: false, reason: `명세에 없는 응답 type ${typeHex}입니다.` };
-  const expected = payloadSize(message);
-  if (length !== expected) return { ok: false, reason: `${message.name}의 length는 ${expected}여야 하는데 ${length}입니다.` };
-  return { ok: true, type: typeHex, message: message.name, role: message.role ?? null, length, totalLength: header.size + length };
+  numbers.forEach((value, index) => {
+    const offset = headerSize(spec) + index * elementSize;
+    writeUint(bytes, offset, elementSize, value);
+    fields.push({ name: `value[${index}]`, offset, size: elementSize, hex: toHex(bytes.subarray(offset, offset + elementSize)), value });
+  });
+  return { message: message.name, bytes, hex: toHex(bytes), fields };
 }
 
-/** 프레임 하나(정확히 헤더+length 바이트)를 해석한다. */
-export function decodeResponse(spec, bytes) {
-  bytes = Buffer.from(bytes);
-  if (bytes.length < spec.header.size) return { ok: false, reason: `헤더보다 짧은 응답입니다(${bytes.length}바이트).` };
-  const head = parseResponseHeader(spec, bytes);
-  if (!head.ok) return { ok: false, reason: head.reason };
-  if (bytes.length !== head.totalLength) {
-    return { ok: false, reason: `프레임 길이가 헤더(${head.totalLength}바이트)와 다릅니다(${bytes.length}바이트).` };
+export function responsePayloadSize(message) {
+  return message.payload.fields.reduce((sum, field) => sum + KIND_SIZE[field.kind], 0);
+}
+
+/**
+ * 헤더만 보고 이 응답이 명세에 맞는지, payload가 몇 바이트인지 알려 준다.
+ * 호출자는 헤더 크기만큼 모은 뒤 이 함수를 쓴다(조각이 어디서 나뉘든 상관없다).
+ */
+export function parseResponseHeader(spec, header) {
+  if (header.length < headerSize(spec)) throw new RangeError("헤더를 다 모으기 전에 호출했다");
+  for (const field of headerFields(spec)) {
+    if (field.kind !== "const") continue;
+    const actual = toHex(header.subarray(field.offset, field.offset + field.size));
+    if (actual !== field.value) {
+      return { ok: false, reason: `응답의 ${field.name}이 ${field.value}가 아니라 ${actual}입니다.`, field: field.name };
+    }
   }
-  const message = spec.messages.response.find((m) => m.name === head.message);
-  const fields = spec.header.fields.map((field) => {
-    const slice = bytes.subarray(field.offset, field.offset + field.size);
-    const hex = toHex(slice);
-    if (field.kind === "length") return { name: field.name, hex, value: slice.readUIntBE(0, field.size) };
-    if (field.kind === "type") return { name: field.name, hex, value: hex, meaning: message.name };
-    return { name: field.name, hex, value: hex };
+  const tf = typeField(spec);
+  const typeHex = toHex(header.subarray(tf.offset, tf.offset + tf.size));
+  const message = spec.messages.response.find((m) => m.type === typeHex);
+  if (!message) return { ok: false, reason: `명세에 없는 응답 type ${typeHex}입니다.`, field: tf.name };
+  const lf = lengthField(spec);
+  const length = readUint(header, lf.offset, lf.size);
+  const expected = responsePayloadSize(message);
+  if (length !== expected) {
+    return { ok: false, reason: `${message.name}의 length가 ${expected}여야 하는데 ${length}입니다.`, field: lf.name };
+  }
+  return { ok: true, message, typeHex, payloadLength: length, totalLength: headerSize(spec) + length };
+}
+
+/** 완전한 응답 프레임 하나를 해석한다. frame은 정확히 header+payload 길이여야 한다. */
+export function decodeResponse(spec, frame) {
+  const parsed = parseResponseHeader(spec, frame);
+  if (!parsed.ok) return { ok: false, reason: parsed.reason, field: parsed.field, hex: toHex(frame) };
+  if (frame.length !== parsed.totalLength) {
+    return { ok: false, reason: `프레임 길이가 ${parsed.totalLength}바이트여야 하는데 ${frame.length}바이트입니다.`, field: "length", hex: toHex(frame) };
+  }
+  const { message } = parsed;
+  const fields = headerFields(spec).map((field) => {
+    const hex = toHex(frame.subarray(field.offset, field.offset + field.size));
+    let value = hex;
+    if (field.kind === "type") value = message.name;
+    if (field.kind === "length") value = readUint(frame, field.offset, field.size);
+    return { name: field.name, offset: field.offset, size: field.size, hex, value };
   });
   const values = {};
   const meanings = {};
-  const parts = [];
-  let at = spec.header.size;
+  let offset = headerSize(spec);
   for (const field of message.payload.fields) {
-    const size = INT_SIZE[field.kind];
-    const slice = bytes.subarray(at, at + size);
-    const value = slice.readUIntBE(0, size);
-    at += size;
-    values[field.name] = value;
-    let meaning;
+    const size = KIND_SIZE[field.kind];
+    const value = readUint(frame, offset, size);
+    const hex = toHex(frame.subarray(offset, offset + size));
+    const entry = { name: field.name, offset, size, hex, value };
     if (field.values) {
-      const key = toHex(slice);
-      meaning = Object.entries(field.values).find(([code]) => code.toLowerCase() === key)?.[1] ?? null;
+      const meaning = field.values[hex] ?? null;
+      entry.meaning = meaning;
       meanings[field.name] = meaning;
-      parts.push(`${field.name}=${value} (${meaning ?? "명세에 없는 코드"})`);
-    } else {
-      parts.push(`${field.name}=${value}`);
     }
-    fields.push({ name: field.name, hex: toHex(slice), value, ...(meaning !== undefined ? { meaning } : {}) });
+    fields.push(entry);
+    values[field.name] = value;
+    offset += size;
   }
-  return { ok: true, message: message.name, role: message.role ?? null, values, meanings, fields, text: `${message.name}: ${parts.join(", ")}` };
+  const text = `${message.name}: ` + message.payload.fields
+    .map((f) => `${f.name}=${values[f.name]}${meanings[f.name] ? ` (${meanings[f.name]})` : f.values ? " (명세에 없는 코드)" : ""}`)
+    .join(", ");
+  return { ok: true, message: message.name, type: parsed.typeHex, values, meanings, fields, text, hex: toHex(frame) };
 }

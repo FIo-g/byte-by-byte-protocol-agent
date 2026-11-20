@@ -1,78 +1,93 @@
-// 연습 서버(runs/n06/practice-server) 프로세스 관리. 바이너리 SHA-256을 기록한다.
+// N08: 연습 서버(runs/n06/practice-server)를 웹 백엔드와 같은 컨테이너에서 자식 프로세스로 실행한다.
+// 서버는 127.0.0.1에만 바인드하므로 같은 컨테이너 안의 백엔드만 접속할 수 있다.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import net from "node:net";
+import { existsSync, readFileSync, statSync } from "node:fs";
 
-const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+const START_TIMEOUT_MS = 5000;
 
-function canConnect(host, port) {
-  return new Promise((done) => {
-    const socket = net.createConnection({ host, port });
-    socket.once("connect", () => { socket.end(); done(true); });
-    socket.once("error", () => done(false));
-  });
-}
-
-export function createPracticeServer({ binary, relativeBinary, port, host = "127.0.0.1", startTimeoutMs = 5000 }) {
-  const label = relativeBinary ?? binary;
+export function createPracticeServer({ binary, port, relativeBinary = "runs/n06/practice-server" }) {
+  const info = {
+    state: "stopped", // stopped | binary_missing | starting | running | exited | failed_to_start
+    message: "",
+    binary: relativeBinary,
+    port,
+    pid: null,
+    sha256: null,
+    size: null,
+    banner: null,
+    exit_code: null,
+    signal: null,
+    started_at: null,
+  };
   let child = null;
-  let state = { state: "stopped", pid: null, sha256: null, binary: label, host, port, message: null };
-
-  const set = (patch) => { state = { ...state, ...patch }; };
+  let stderrText = "";
 
   return {
-    snapshot: () => ({ ...state }),
+    snapshot: () => ({ ...info }),
 
     async start() {
       if (!existsSync(binary)) {
-        set({
-          state: "binary_missing",
-          message: `${label} 가 없습니다. 먼저 빌드하세요: docker compose -f compose.n05.yaml run --rm n05 gcc -O0 -fno-inline -Wall -Wextra -o runs/n06/practice-server practice/n06/server.c`,
+        info.state = "binary_missing";
+        info.message = `${relativeBinary} 가 없습니다. docs/n08-web-client.md의 '서버 빌드' 명령을 먼저 실행하세요.`;
+        return info;
+      }
+      const bytes = readFileSync(binary);
+      info.sha256 = createHash("sha256").update(bytes).digest("hex");
+      info.size = statSync(binary).size;
+      info.state = "starting";
+      await new Promise((resolve) => {
+        child = spawn(binary, [String(port)], { shell: false, stdio: ["ignore", "ignore", "pipe"] });
+        info.pid = child.pid ?? null;
+        const timer = setTimeout(() => {
+          info.state = "failed_to_start";
+          info.message = `서버가 ${START_TIMEOUT_MS / 1000}초 안에 시작 메시지를 내지 않았습니다.`;
+          resolve();
+        }, START_TIMEOUT_MS);
+        child.stderr.on("data", (chunk) => {
+          stderrText = (stderrText + chunk.toString("utf8")).slice(-2000);
+          const match = stderrText.match(/listening on (127\.0\.0\.1:\d+)/);
+          if (match && info.state === "starting") {
+            info.state = "running";
+            info.banner = stderrText.trim().split("\n").find((line) => line.includes("listening on")) ?? null;
+            info.started_at = new Date().toISOString();
+            clearTimeout(timer);
+            resolve();
+          }
         });
-        return this.snapshot();
-      }
-      set({ sha256: createHash("sha256").update(readFileSync(binary)).digest("hex") });
-      try {
-        child = spawn(binary, [String(port)], { stdio: ["ignore", "ignore", "pipe"] });
-      } catch (error) {
-        set({ state: "failed", message: `서버를 실행하지 못했습니다: ${error.message}` });
-        return this.snapshot();
-      }
-      let stderr = "";
-      child.stderr.on("data", (chunk) => { stderr = (stderr + chunk.toString("utf8")).slice(-2000); });
-      const spawned = child;
-      spawned.on("error", (error) => set({ state: "failed", pid: null, message: `서버를 실행하지 못했습니다: ${error.message}` }));
-      spawned.on("exit", (code, signal) => {
-        if (child === spawned) child = null;
-        if (state.state !== "stopped") set({ state: "exited", pid: null, message: `서버가 종료됐습니다(code ${code}, signal ${signal}). ${stderr.trim()}`.trim() });
+        child.on("error", (error) => {
+          info.state = "failed_to_start";
+          info.message = `서버를 실행하지 못했습니다: ${error.message}`;
+          clearTimeout(timer);
+          resolve();
+        });
+        child.on("exit", (code, signal) => {
+          info.exit_code = code;
+          info.signal = signal;
+          if (info.state === "running" || info.state === "starting") {
+            info.state = "exited";
+            info.message = `서버 프로세스가 끝났습니다 (code ${code}, signal ${signal}). ${stderrText.trim().slice(-300)}`;
+          }
+          clearTimeout(timer);
+          resolve();
+        });
       });
-      set({ state: "starting", pid: spawned.pid ?? null, message: null });
-
-      const deadline = Date.now() + startTimeoutMs;
-      while (Date.now() < deadline) {
-        if (state.state !== "starting") return this.snapshot();
-        if (await canConnect(host, port)) {
-          set({ state: "running", message: null });
-          return this.snapshot();
-        }
-        await sleep(50);
-      }
-      set({ state: "failed", message: `${startTimeoutMs} ms 안에 ${host}:${port}에서 접속을 받지 않았습니다. ${stderr.trim()}`.trim() });
-      return this.snapshot();
+      return info;
     },
 
+    /** SIGTERM으로 끝내고 2초 안에 안 끝나면 SIGKILL. 끝난 뒤 반환한다. */
     async stop() {
-      const running = child;
-      set({ state: "stopped", pid: null });
-      if (!running || running.exitCode !== null) return;
-      const exited = new Promise((done) => running.once("exit", done));
-      running.kill("SIGTERM");
-      const killed = await Promise.race([exited.then(() => true), sleep(2000).then(() => false)]);
-      if (!killed) {
-        running.kill("SIGKILL");
-        await exited;
-      }
+      if (!child || child.exitCode !== null || child.signalCode !== null) return;
+      await new Promise((resolve) => {
+        const kill = setTimeout(() => child.kill("SIGKILL"), 2000);
+        child.once("exit", () => {
+          clearTimeout(kill);
+          resolve();
+        });
+        child.kill("SIGTERM");
+      });
+      info.state = "stopped";
+      info.message = "웹 서버 종료와 함께 정리했습니다.";
     },
   };
 }
